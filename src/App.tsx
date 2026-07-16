@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -16,11 +16,29 @@ import {
 } from "lucide-react";
 import { compilePrompt, overallScore, scorePrompt } from "./promptEngine";
 import { generateQuestions } from "./provider";
-import type { Answer, AppStage, Question, ResearchSource } from "./types";
+import type { Answer, AppStage, Question, ResearchSource, SavedPrompt } from "./types";
 import { logout } from "./app/auth/actions";
 
 const EXAMPLE_PROMPT =
   "Write a launch memo for our new team analytics dashboard. It needs to convince operations leaders to start a 30-day pilot.";
+const SAVED_PROMPTS_KEY = "promptwell:sessions";
+
+function titleFromPrompt(value: string): string {
+  const words = value.trim().replace(/\s+/g, " ").split(" ").slice(0, 6);
+  if (words.length === 0 || !words[0]) return "Untitled prompt";
+  const title = words.join(" ");
+  return title.length < value.trim().length ? `${title}…` : title;
+}
+
+function readSavedPrompts(): SavedPrompt[] {
+  try {
+    const value = window.localStorage.getItem(SAVED_PROMPTS_KEY);
+    const parsed = value ? (JSON.parse(value) as unknown) : [];
+    return Array.isArray(parsed) ? (parsed as SavedPrompt[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 interface AppProps {
   user: {
@@ -37,6 +55,8 @@ function App({ user }: AppProps) {
   const [questionIndex, setQuestionIndex] = useState(0);
   const [draftAnswer, setDraftAnswer] = useState("");
   const [researchSources, setResearchSources] = useState<ResearchSource[]>([]);
+  const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
+  const [activePromptId, setActivePromptId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -50,6 +70,19 @@ function App({ user }: AppProps) {
     [prompt, questions, answers],
   );
   const activeQuestion = questions[questionIndex];
+  const documentTitle = titleFromPrompt(prompt);
+
+  useEffect(() => {
+    setSavedPrompts(readSavedPrompts());
+  }, []);
+
+  function persistSession(session: SavedPrompt) {
+    setSavedPrompts((current) => {
+      const next = [session, ...current.filter((item) => item.id !== session.id)].slice(0, 30);
+      window.localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   async function analyzePrompt() {
     if (prompt.trim().length < 12) {
@@ -62,11 +95,23 @@ function App({ user }: AppProps) {
 
     try {
       const result = await generateQuestions(prompt);
+      const sessionId = activePromptId ?? window.crypto.randomUUID();
       setQuestions(result.questions);
       setResearchSources(result.sources);
       setAnswers([]);
       setQuestionIndex(0);
+      setActivePromptId(sessionId);
       setStage("questions");
+      persistSession({
+        id: sessionId,
+        title: titleFromPrompt(prompt),
+        prompt: prompt.trim(),
+        questions: result.questions,
+        answers: [],
+        sources: result.sources,
+        stage: "questions",
+        updatedAt: new Date().toISOString(),
+      });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Question generation failed.");
     } finally {
@@ -76,14 +121,29 @@ function App({ user }: AppProps) {
 
   function submitAnswer(value = draftAnswer) {
     if (!activeQuestion || !value.trim()) return;
-    setAnswers((current) => [
-      ...current.filter((answer) => answer.questionId !== activeQuestion.id),
+    const nextAnswers = [
+      ...answers.filter((answer) => answer.questionId !== activeQuestion.id),
       { questionId: activeQuestion.id, value: value.trim() },
-    ]);
+    ];
+    setAnswers(nextAnswers);
     setDraftAnswer("");
 
-    if (questionIndex === questions.length - 1) {
-      setStage("result");
+    const nextStage = questionIndex === questions.length - 1 ? "result" : "questions";
+    if (activePromptId) {
+      persistSession({
+        id: activePromptId,
+        title: titleFromPrompt(prompt),
+        prompt,
+        questions,
+        answers: nextAnswers,
+        sources: researchSources,
+        stage: nextStage,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    if (nextStage === "result") {
+      setStage(nextStage);
       return;
     }
     setQuestionIndex((current) => current + 1);
@@ -99,6 +159,37 @@ function App({ user }: AppProps) {
     setError("");
     setStage("draft");
     setSidebarOpen(false);
+    setActivePromptId(null);
+  }
+
+  function openSavedPrompt(session: SavedPrompt) {
+    setPrompt(session.prompt);
+    setQuestions(session.questions);
+    setAnswers(session.answers);
+    setResearchSources(session.sources);
+    setQuestionIndex(Math.min(session.answers.length, Math.max(session.questions.length - 1, 0)));
+    setActivePromptId(session.id);
+    setStage(session.stage);
+    setSidebarOpen(false);
+  }
+
+  function skipQuestion() {
+    const nextStage = questionIndex === questions.length - 1 ? "result" : "questions";
+    if (activePromptId) {
+      persistSession({
+        id: activePromptId,
+        title: titleFromPrompt(prompt),
+        prompt,
+        questions,
+        answers,
+        sources: researchSources,
+        stage: nextStage,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    if (nextStage === "result") setStage(nextStage);
+    else setQuestionIndex((current) => current + 1);
   }
 
   async function copyResult() {
@@ -127,29 +218,28 @@ function App({ user }: AppProps) {
         </button>
 
         <nav className="prompt-history" aria-label="Prompt history">
-          <p className="nav-label">Today</p>
-          <button className="history-item history-item--active">
-            <span className="history-icon"><MessageSquareText size={15} /></span>
-            <span>
-              <strong>Launch memo</strong>
-              <small>5 questions answered</small>
-            </span>
-          </button>
-          <button className="history-item">
-            <span className="history-icon"><MessageSquareText size={15} /></span>
-            <span>
-              <strong>API migration plan</strong>
-              <small>Ready to refine</small>
-            </span>
-          </button>
-          <p className="nav-label nav-label--spaced">Previous 7 days</p>
-          <button className="history-item">
-            <span className="history-icon"><MessageSquareText size={15} /></span>
-            <span>
-              <strong>Homepage direction</strong>
-              <small>6 questions answered</small>
-            </span>
-          </button>
+          <p className="nav-label">Recent prompts</p>
+          {savedPrompts.length === 0 ? (
+            <p className="history-empty">Your researched prompts will appear here.</p>
+          ) : (
+            savedPrompts.map((session) => (
+              <button
+                className={`history-item ${activePromptId === session.id ? "history-item--active" : ""}`}
+                key={session.id}
+                onClick={() => openSavedPrompt(session)}
+              >
+                <span className="history-icon"><MessageSquareText size={15} /></span>
+                <span>
+                  <strong>{session.title}</strong>
+                  <small>
+                    {session.stage === "result"
+                      ? `${session.answers.length} decisions resolved`
+                      : `${session.answers.length} of ${session.questions.length} answered`}
+                  </small>
+                </span>
+              </button>
+            ))
+          )}
         </nav>
 
         <div className="sidebar-footer">
@@ -177,7 +267,7 @@ function App({ user }: AppProps) {
           </button>
           <div className="document-name">
             <span className="status-dot" />
-            <span>{stage === "draft" ? "Untitled prompt" : "Launch memo"}</span>
+            <span>{stage === "draft" ? "Untitled prompt" : documentTitle}</span>
           </div>
           <div className="topbar-actions">
             <span className="autosave">Saved locally</span>
@@ -252,7 +342,7 @@ function App({ user }: AppProps) {
               <div className="research-status">
                 <Sparkles size={14} />
                 <span>
-                  Guide applied · {researchSources.length || "Current"} web sources checked
+                  Guide applied · {researchSources.length} web {researchSources.length === 1 ? "source" : "sources"} checked
                 </span>
               </div>
 
@@ -301,10 +391,7 @@ function App({ user }: AppProps) {
               </article>
               <button
                 className="skip-button"
-                onClick={() => {
-                  if (questionIndex === questions.length - 1) setStage("result");
-                  else setQuestionIndex((current) => current + 1);
-                }}
+                onClick={skipQuestion}
               >
                 Skip this question
               </button>
@@ -332,6 +419,18 @@ function App({ user }: AppProps) {
                 </button>
               </div>
               <pre className="compiled-prompt">{compiledPrompt}</pre>
+              <section className="research-sources" aria-labelledby="research-sources-title">
+                <div className="research-sources-heading">
+                  <span>Research trail</span>
+                  <strong id="research-sources-title">{researchSources.length} sources</strong>
+                </div>
+                {researchSources.map((source) => (
+                  <a href={source.url} key={source.url} target="_blank" rel="noreferrer">
+                    <span>{source.title}</span>
+                    <small>{source.practice}</small>
+                  </a>
+                ))}
+              </section>
               <div className="result-actions">
                 <button className="secondary-button" onClick={() => {
                   setStage("questions");

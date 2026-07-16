@@ -3,11 +3,16 @@ import { NextResponse } from "next/server";
 
 import { MASTER_PROMPT_GUIDE } from "@/lib/masterGuide";
 
-const MODEL = "gpt-5.4-mini";
-const MAX_PROMPT_CHARACTERS = 12_000;
-const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
-const RATE_LIMIT_REQUESTS = 10;
-const DEFAULT_MONTHLY_REQUEST_CAP = 250;
+interface EngineConfig {
+  apiKey: string;
+  model: "gpt-5.4-mini";
+  maxPromptCharacters: number;
+  maxOutputTokens: number;
+  monthlyRequestCap: number;
+  reasoningEffort: "low" | "medium" | "high";
+  rateLimitRequests: number;
+  rateLimitWindowMs: number;
+}
 
 interface RateLimitEntry {
   count: number;
@@ -20,11 +25,6 @@ interface OpenAIResponse {
     content?: Array<{
       type?: string;
       text?: string;
-      annotations?: Array<{
-        type?: string;
-        url?: string;
-        title?: string;
-      }>;
     }>;
   }>;
 }
@@ -36,13 +36,40 @@ const globalForRateLimit = globalThis as typeof globalThis & {
 const rateLimits = globalForRateLimit.promptwellRateLimits ?? new Map<string, RateLimitEntry>();
 globalForRateLimit.promptwellRateLimits = rateLimits;
 
-function reserveMonthlyRequest(): boolean {
+function readPositiveInteger(name: string): number {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
+}
+
+function readEngineConfig(): EngineConfig {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const model = process.env.OPENAI_MODEL?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  if (model !== "gpt-5.4-mini") {
+    throw new Error("OPENAI_MODEL must be gpt-5.4-mini.");
+  }
+  const reasoningEffort = process.env.OPENAI_REASONING_EFFORT?.trim();
+  if (reasoningEffort !== "low" && reasoningEffort !== "medium" && reasoningEffort !== "high") {
+    throw new Error("OPENAI_REASONING_EFFORT must be low, medium, or high.");
+  }
+
+  return {
+    apiKey,
+    model,
+    maxPromptCharacters: readPositiveInteger("PROMPT_MAX_CHARACTERS"),
+    maxOutputTokens: readPositiveInteger("PROMPT_MAX_OUTPUT_TOKENS"),
+    monthlyRequestCap: readPositiveInteger("OPENAI_MONTHLY_REQUEST_CAP"),
+    reasoningEffort,
+    rateLimitRequests: readPositiveInteger("PROMPT_RATE_LIMIT_REQUESTS"),
+    rateLimitWindowMs: readPositiveInteger("PROMPT_RATE_LIMIT_WINDOW_MS"),
+  };
+}
+
+function reserveMonthlyRequest(cap: number): boolean {
   const month = new Date().toISOString().slice(0, 7);
-  const configuredCap = Number.parseInt(process.env.OPENAI_MONTHLY_REQUEST_CAP ?? "", 10);
-  const cap =
-    Number.isFinite(configuredCap) && configuredCap > 0
-      ? configuredCap
-      : DEFAULT_MONTHLY_REQUEST_CAP;
   const usage = globalForRateLimit.promptwellMonthlyUsage;
 
   if (!usage || usage.month !== month) {
@@ -55,16 +82,16 @@ function reserveMonthlyRequest(): boolean {
   return true;
 }
 
-function isRateLimited(userId: string): boolean {
+function isRateLimited(userId: string, requestLimit: number, windowMs: number): boolean {
   const now = Date.now();
   const current = rateLimits.get(userId);
 
   if (!current || current.resetAt <= now) {
-    rateLimits.set(userId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    rateLimits.set(userId, { count: 1, resetAt: now + windowMs });
     return false;
   }
 
-  if (current.count >= RATE_LIMIT_REQUESTS) return true;
+  if (current.count >= requestLimit) return true;
   current.count += 1;
   return false;
 }
@@ -79,46 +106,27 @@ function extractOutputText(response: OpenAIResponse): string | undefined {
   return undefined;
 }
 
-function extractSources(response: OpenAIResponse) {
-  const seen = new Set<string>();
-  const sources: Array<{ title: string; url: string }> = [];
-
-  for (const output of response.output ?? []) {
-    for (const content of output.content ?? []) {
-      for (const annotation of content.annotations ?? []) {
-        if (annotation.type !== "url_citation" || !annotation.url || seen.has(annotation.url)) {
-          continue;
-        }
-        seen.add(annotation.url);
-        sources.push({
-          title: annotation.title?.trim() || new URL(annotation.url).hostname,
-          url: annotation.url,
-        });
-      }
-    }
-  }
-
-  return sources.slice(0, 5);
-}
-
 export async function POST(request: Request) {
   const { user } = await withAuth();
   if (!user) {
     return NextResponse.json({ error: "Sign in is required." }, { status: 401 });
   }
 
-  if (isRateLimited(user.id)) {
-    return NextResponse.json(
-      { error: "Too many requests. Try again in a few minutes." },
-      { status: 429 },
-    );
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
+  let config: EngineConfig;
+  try {
+    config = readEngineConfig();
+  } catch (error) {
+    console.error("[Prompt research] Invalid server configuration", error);
     return NextResponse.json(
       { error: "Prompt research is not configured." },
       { status: 503 },
+    );
+  }
+
+  if (isRateLimited(user.id, config.rateLimitRequests, config.rateLimitWindowMs)) {
+    return NextResponse.json(
+      { error: "Too many requests. Try again in a few minutes." },
+      { status: 429 },
     );
   }
 
@@ -134,14 +142,14 @@ export async function POST(request: Request) {
       ? body.prompt.trim()
       : "";
 
-  if (prompt.length < 12 || prompt.length > MAX_PROMPT_CHARACTERS) {
+  if (prompt.length < 12 || prompt.length > config.maxPromptCharacters) {
     return NextResponse.json(
-      { error: `Prompt length must be between 12 and ${MAX_PROMPT_CHARACTERS.toLocaleString()} characters.` },
+      { error: `Prompt length must be between 12 and ${config.maxPromptCharacters.toLocaleString()} characters.` },
       { status: 400 },
     );
   }
 
-  if (!reserveMonthlyRequest()) {
+  if (!reserveMonthlyRequest(config.monthlyRequestCap)) {
     return NextResponse.json(
       { error: "This month’s research allowance has been reached." },
       { status: 429 },
@@ -151,13 +159,13 @@ export async function POST(request: Request) {
   const openAIResponse = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${config.apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: MODEL,
-      reasoning: { effort: "medium" },
-      max_output_tokens: 2200,
+      model: config.model,
+      reasoning: { effort: config.reasoningEffort },
+      max_output_tokens: config.maxOutputTokens,
       tools: [
         {
           type: "web_search",
@@ -176,7 +184,7 @@ export async function POST(request: Request) {
           schema: {
             type: "object",
             additionalProperties: false,
-            required: ["questions"],
+            required: ["questions", "sources"],
             properties: {
               questions: {
                 type: "array",
@@ -198,6 +206,21 @@ export async function POST(request: Request) {
                       maxItems: 5,
                     },
                     placeholder: { type: "string" },
+                  },
+                },
+              },
+              sources: {
+                type: "array",
+                minItems: 1,
+                maxItems: 5,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["title", "url", "practice"],
+                  properties: {
+                    title: { type: "string" },
+                    url: { type: "string" },
+                    practice: { type: "string" },
                   },
                 },
               },
@@ -227,14 +250,16 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = JSON.parse(outputText) as { questions: unknown[] };
-    if (!Array.isArray(result.questions) || result.questions.length === 0) {
-      throw new Error("Question array missing");
+    const result = JSON.parse(outputText) as { questions: unknown[]; sources: unknown[] };
+    if (
+      !Array.isArray(result.questions) ||
+      result.questions.length === 0 ||
+      !Array.isArray(result.sources) ||
+      result.sources.length === 0
+    ) {
+      throw new Error("Questions or research sources are missing");
     }
-    return NextResponse.json({
-      questions: result.questions,
-      sources: extractSources(response),
-    });
+    return NextResponse.json(result);
   } catch (error) {
     console.error("[Prompt research] Invalid structured response", error);
     return NextResponse.json(

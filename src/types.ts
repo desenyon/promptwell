@@ -18,6 +18,7 @@ export interface Answer {
 export interface ResearchSource {
   title: string;
   url: string;
+  practice?: string;
 }
 
 export interface PromptScore {
@@ -29,3 +30,14 @@ export interface PromptScore {
 }
 
 export type AppStage = "draft" | "questions" | "result";
+
+export interface SavedPrompt {
+  id: string;
+  title: string;
+  prompt: string;
+  questions: Question[];
+  answers: Answer[];
+  sources: ResearchSource[];
+  stage: Exclude<AppStage, "draft">;
+  updatedAt: string;
+}
