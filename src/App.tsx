@@ -1,0 +1,384 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import {
+  ArrowRight,
+  Check,
+  ChevronRight,
+  Copy,
+  LogOut,
+  Menu,
+  MessageSquareText,
+  PanelRightClose,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react";
+import { compilePrompt, overallScore, scorePrompt } from "./promptEngine";
+import { generateQuestions } from "./provider";
+import type { Answer, AppStage, Question, ResearchSource } from "./types";
+import { logout } from "./app/auth/actions";
+
+const EXAMPLE_PROMPT =
+  "Write a launch memo for our new team analytics dashboard. It needs to convince operations leaders to start a 30-day pilot.";
+
+interface AppProps {
+  user: {
+    email: string;
+    firstName?: string | null;
+  };
+}
+
+function App({ user }: AppProps) {
+  const [stage, setStage] = useState<AppStage>("draft");
+  const [prompt, setPrompt] = useState("");
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [answers, setAnswers] = useState<Answer[]>([]);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [draftAnswer, setDraftAnswer] = useState("");
+  const [researchSources, setResearchSources] = useState<ResearchSource[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const score = useMemo(() => scorePrompt(prompt, answers.length), [prompt, answers.length]);
+  const totalScore = overallScore(score);
+  const compiledPrompt = useMemo(
+    () => compilePrompt(prompt, questions, answers),
+    [prompt, questions, answers],
+  );
+  const activeQuestion = questions[questionIndex];
+
+  async function analyzePrompt() {
+    if (prompt.trim().length < 12) {
+      setError("Give us at least one complete sentence to work with.");
+      return;
+    }
+
+    setError("");
+    setIsAnalyzing(true);
+
+    try {
+      const result = await generateQuestions(prompt);
+      setQuestions(result.questions);
+      setResearchSources(result.sources);
+      setAnswers([]);
+      setQuestionIndex(0);
+      setStage("questions");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Question generation failed.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  function submitAnswer(value = draftAnswer) {
+    if (!activeQuestion || !value.trim()) return;
+    setAnswers((current) => [
+      ...current.filter((answer) => answer.questionId !== activeQuestion.id),
+      { questionId: activeQuestion.id, value: value.trim() },
+    ]);
+    setDraftAnswer("");
+
+    if (questionIndex === questions.length - 1) {
+      setStage("result");
+      return;
+    }
+    setQuestionIndex((current) => current + 1);
+  }
+
+  function resetWorkspace() {
+    setPrompt("");
+    setQuestions([]);
+    setResearchSources([]);
+    setAnswers([]);
+    setQuestionIndex(0);
+    setDraftAnswer("");
+    setError("");
+    setStage("draft");
+    setSidebarOpen(false);
+  }
+
+  async function copyResult() {
+    await navigator.clipboard.writeText(compiledPrompt);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
+        <div className="brand-row">
+          <button className="brand" onClick={resetWorkspace} aria-label="Promptwell home">
+            <span className="brand-mark">P/</span>
+            <span>Promptwell</span>
+          </button>
+          <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <button className="new-prompt-button" onClick={resetWorkspace}>
+          <Plus size={17} />
+          New prompt
+          <span className="shortcut">⌘ N</span>
+        </button>
+
+        <nav className="prompt-history" aria-label="Prompt history">
+          <p className="nav-label">Today</p>
+          <button className="history-item history-item--active">
+            <span className="history-icon"><MessageSquareText size={15} /></span>
+            <span>
+              <strong>Launch memo</strong>
+              <small>5 questions answered</small>
+            </span>
+          </button>
+          <button className="history-item">
+            <span className="history-icon"><MessageSquareText size={15} /></span>
+            <span>
+              <strong>API migration plan</strong>
+              <small>Ready to refine</small>
+            </span>
+          </button>
+          <p className="nav-label nav-label--spaced">Previous 7 days</p>
+          <button className="history-item">
+            <span className="history-icon"><MessageSquareText size={15} /></span>
+            <span>
+              <strong>Homepage direction</strong>
+              <small>6 questions answered</small>
+            </span>
+          </button>
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="account-row">
+            <span className="account-avatar">{(user.firstName || user.email).charAt(0).toUpperCase()}</span>
+            <span>
+              <strong>{user.firstName || "Signed in"}</strong>
+              <small>{user.email}</small>
+            </span>
+            <form action={logout}>
+              <button className="sign-out-button" aria-label="Sign out" title="Sign out">
+                <LogOut size={15} />
+              </button>
+            </form>
+          </div>
+        </div>
+      </aside>
+
+      {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
+
+      <main className="workspace">
+        <header className="topbar">
+          <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)}>
+            <Menu size={20} />
+          </button>
+          <div className="document-name">
+            <span className="status-dot" />
+            <span>{stage === "draft" ? "Untitled prompt" : "Launch memo"}</span>
+          </div>
+          <div className="topbar-actions">
+            <span className="autosave">Saved locally</span>
+            <button className="quality-toggle" onClick={() => setQualityOpen((open) => !open)}>
+              Score {totalScore}
+              <PanelRightClose size={16} />
+            </button>
+          </div>
+        </header>
+
+        <section className="conversation">
+          {stage === "draft" && (
+            <div className="draft-view">
+              <div className="eyebrow"><span>01</span> Rough material</div>
+              <h1>What are you trying<br />to make?</h1>
+              <p className="lead">
+                Paste the prompt you have. We’ll research the domain and find the missing decisions.
+              </p>
+
+              <div className="prompt-composer">
+                <textarea
+                  value={prompt}
+                  onChange={(event) => {
+                    setPrompt(event.target.value);
+                    setError("");
+                  }}
+                  placeholder="Paste a rough prompt, brief, or half-formed idea…"
+                  aria-label="Your rough prompt"
+                  autoFocus
+                />
+                <div className="composer-footer">
+                  <button className="text-button" onClick={() => setPrompt(EXAMPLE_PROMPT)}>
+                    Use an example
+                  </button>
+                  <div className="composer-submit">
+                    <span>{prompt.length.toLocaleString()} / 12,000</span>
+                    <button
+                      className="primary-button"
+                      onClick={analyzePrompt}
+                      disabled={isAnalyzing}
+                    >
+                      {isAnalyzing ? "Reading closely…" : "Interrogate prompt"}
+                      {!isAnalyzing && <ArrowRight size={17} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {error && <p className="error-message">{error}</p>}
+
+              <div className="process-note">
+                <span className="process-rule" />
+                <p>
+                  <strong>Not a rewrite button.</strong> Promptwell asks what the original prompt
+                  leaves undecided, then compiles your answers into a testable instruction.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {stage === "questions" && activeQuestion && (
+            <div className="question-view">
+              <div className="progress-header">
+                <div>
+                  <span className="progress-kicker">Refining your brief</span>
+                  <strong>{questionIndex + 1} of {questions.length}</strong>
+                </div>
+                <div className="progress-track">
+                  <span style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} />
+                </div>
+              </div>
+
+              <div className="research-status">
+                <Sparkles size={14} />
+                <span>
+                  Guide applied · {researchSources.length || "Current"} web sources checked
+                </span>
+              </div>
+
+              <div className="source-card">
+                <span>Your prompt</span>
+                <p>{prompt}</p>
+              </div>
+
+              <article className="question-card">
+                <div className="question-number">{String(questionIndex + 1).padStart(2, "0")}</div>
+                <div className="question-content">
+                  <span className="principle">{activeQuestion.principle}</span>
+                  <h2>{activeQuestion.prompt}</h2>
+                  <p className="question-why">{activeQuestion.why}</p>
+
+                  {activeQuestion.kind === "choice" ? (
+                    <div className="choice-list">
+                      {activeQuestion.options?.map((option) => (
+                        <button key={option} onClick={() => submitAnswer(option)}>
+                          <span>{option}</span>
+                          <ChevronRight size={18} />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="answer-field">
+                      <textarea
+                        value={draftAnswer}
+                        onChange={(event) => setDraftAnswer(event.target.value)}
+                        placeholder={activeQuestion.placeholder ?? "Be concrete…"}
+                        onKeyDown={(event) => {
+                          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submitAnswer();
+                        }}
+                        autoFocus
+                      />
+                      <button
+                        className="primary-button"
+                        disabled={!draftAnswer.trim()}
+                        onClick={() => submitAnswer()}
+                      >
+                        Continue <ArrowRight size={17} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </article>
+              <button
+                className="skip-button"
+                onClick={() => {
+                  if (questionIndex === questions.length - 1) setStage("result");
+                  else setQuestionIndex((current) => current + 1);
+                }}
+              >
+                Skip this question
+              </button>
+            </div>
+          )}
+
+          {stage === "result" && (
+            <div className="result-view">
+              <div className="result-heading">
+                <div>
+                  <div className="eyebrow"><span>03</span> Compiled instruction</div>
+                  <h1>Your prompt<br />now holds water.</h1>
+                </div>
+                <div className="score-stamp">
+                  <span>{totalScore}</span>
+                  <small>quality<br />score</small>
+                </div>
+              </div>
+
+              <div className="result-toolbar">
+                <span>{answers.length} decisions resolved</span>
+                <button onClick={copyResult}>
+                  {copied ? <Check size={16} /> : <Copy size={16} />}
+                  {copied ? "Copied" : "Copy prompt"}
+                </button>
+              </div>
+              <pre className="compiled-prompt">{compiledPrompt}</pre>
+              <div className="result-actions">
+                <button className="secondary-button" onClick={() => {
+                  setStage("questions");
+                  setQuestionIndex(0);
+                }}>
+                  Review answers
+                </button>
+                <button className="primary-button" onClick={resetWorkspace}>
+                  Refine another prompt <ArrowRight size={17} />
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      </main>
+
+      <aside className={`quality-panel ${qualityOpen ? "quality-panel--open" : ""}`}>
+        <div className="quality-header">
+          <div>
+            <span>Prompt health</span>
+            <strong>{totalScore}<small>/100</small></strong>
+          </div>
+          <Sparkles size={18} />
+        </div>
+        <div className="quality-spine" aria-label={`Prompt quality ${totalScore} out of 100`}>
+          <span style={{ height: `${totalScore}%` }} />
+        </div>
+        <div className="metric-list">
+          {Object.entries(score).map(([label, value]) => (
+            <div className="metric" key={label}>
+              <div><span>{label}</span><strong>{value}</strong></div>
+              <div className="metric-track"><span style={{ width: `${value}%` }} /></div>
+            </div>
+          ))}
+        </div>
+        <div className="quality-insight">
+          <span>Next leverage point</span>
+          <p>
+            {score.verification < 50
+              ? "Define what would make the output fail. An invisible rubric cannot guide the result."
+              : "The brief is constrained enough to produce a specific, auditable result."}
+          </p>
+        </div>
+      </aside>
+
+    </div>
+  );
+}
+
+export default App;
