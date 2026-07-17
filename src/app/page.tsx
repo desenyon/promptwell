@@ -10,6 +10,7 @@ export default async function HomePage() {
   return (
     <App
       user={{
+        id: user.id,
         email: user.email,
         firstName: user.firstName,
       }}

@@ -14,6 +14,7 @@
     "@workos-inc/authkit-nextjs": "^4.2.0",
     "lucide-react": "^1.23.0",
     "next": "16.2.9",
+    "postgres": "^3.4.9",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

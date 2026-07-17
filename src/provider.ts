@@ -1,4 +1,4 @@
-import type { Question, ResearchSource } from "./types";
+import type { Question, ResearchBrief, ResearchSource } from "./types";
 
 function validateQuestions(value: unknown): Question[] {
   if (!value || typeof value !== "object" || !("questions" in value)) {
@@ -32,6 +32,7 @@ function validateQuestions(value: unknown): Question[] {
 interface RefineResponse {
   questions: Question[];
   sources: ResearchSource[];
+  researchBrief: ResearchBrief;
 }
 
 function validateSources(value: unknown): ResearchSource[] {
@@ -60,7 +61,48 @@ function validateSources(value: unknown): ResearchSource[] {
   if (sources.length === 0) {
     throw new Error("Prompt research returned no valid sources.");
   }
-  return sources.slice(0, 5);
+  return sources.slice(0, 6);
+}
+
+function validateStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`Prompt research returned an invalid ${field}.`);
+  }
+  return value.slice(0, 8);
+}
+
+function validateResearchBrief(value: unknown): ResearchBrief {
+  if (!value || typeof value !== "object") {
+    throw new Error("Prompt research did not include a strategy.");
+  }
+  const candidate = value as Partial<ResearchBrief>;
+  if (
+    typeof candidate.domain !== "string" ||
+    typeof candidate.taskType !== "string" ||
+    !Array.isArray(candidate.practices)
+  ) {
+    throw new Error("Prompt research returned an invalid strategy.");
+  }
+
+  const practices = candidate.practices.filter(
+    (practice) =>
+      practice &&
+      typeof practice === "object" &&
+      typeof practice.title === "string" &&
+      typeof practice.guidance === "string" &&
+      typeof practice.application === "string",
+  );
+  if (practices.length === 0) {
+    throw new Error("Prompt research returned no usable practices.");
+  }
+
+  return {
+    domain: candidate.domain,
+    taskType: candidate.taskType,
+    practices: practices.slice(0, 6),
+    toolPlan: validateStringArray(candidate.toolPlan, "tool plan"),
+    verificationPlan: validateStringArray(candidate.verificationPlan, "verification plan"),
+  };
 }
 
 export async function generateQuestions(prompt: string): Promise<RefineResponse> {
@@ -80,10 +122,12 @@ export async function generateQuestions(prompt: string): Promise<RefineResponse>
   const body = (await response.json()) as {
     questions?: unknown;
     sources?: ResearchSource[];
+    researchBrief?: unknown;
   };
 
   return {
     questions: validateQuestions({ questions: body.questions }),
     sources: validateSources(body.sources),
+    researchBrief: validateResearchBrief(body.researchBrief),
   };
 }
