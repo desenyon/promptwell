@@ -109,8 +109,8 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
             <span className="modal-kicker">Your working environment</span>
             <h1>{firstName ? `Set up your profile, ${firstName}.` : "Set up your prompting profile."}</h1>
             <p>
-              Choose every environment you use — Cursor, Claude Code, Codex, or plain chat. Promptwell
-              remembers platforms and instruction systems so it does not re-ask on every prompt.
+              Choose every environment you use. Promptwell remembers them so it does not re-ask
+              every time.
             </p>
             <SelectionGrid
               options={PLATFORM_OPTIONS}
@@ -123,10 +123,9 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
         {step === 1 && (
           <>
             <span className="modal-kicker">Available extensions</span>
-            <h1>Which tools can your agents actually call?</h1>
+            <h1>Which tools can your agents call?</h1>
             <p>
-              Mark Graphify, Context7, Headroom, MCP, skills, hooks, optimization workflows, and web
-              search only if they are truly available. Tool plans stay conditional on this list.
+              Select only what is truly available. Tool plans stay conditional on this list.
             </p>
             <SelectionGrid
               options={TOOL_OPTIONS}
@@ -139,10 +138,10 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
         {step === 2 && (
           <>
             <span className="modal-kicker">Persistent instructions</span>
-            <h1>Where do your projects keep agent guidance?</h1>
+            <h1>Where do projects keep agent guidance?</h1>
             <p>
-              AGENTS.md for cross-tool rules, CLAUDE.md for Claude-specific memory, Cursor rules for
-              scoped activation. We tell the agent which chain to inspect first.
+              AGENTS.md for shared rules, CLAUDE.md for Claude memory, Cursor rules for scoped
+              activation.
             </p>
             <SelectionGrid
               options={INSTRUCTION_OPTIONS}
@@ -157,10 +156,9 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
         {step === 3 && (
           <>
             <span className="modal-kicker">Default behavior</span>
-            <h1>Make the useful defaults automatic.</h1>
+            <h1>Make useful defaults automatic.</h1>
             <p>
-              These settings sync to your account. Each workspace can override them later without
-              changing the account-wide profile.
+              These sync to your account. Workspaces can override them later.
             </p>
             <div className="onboarding-form">
               <label>
