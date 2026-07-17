@@ -26,7 +26,7 @@ function validateQuestions(value: unknown): Question[] {
     throw new Error("Prompt research returned no usable questions.");
   }
 
-  return questions.slice(0, 7);
+  return questions.slice(0, 8);
 }
 
 interface RefineResponse {

@@ -3,33 +3,14 @@
 import { ArrowUpRight, History, Search, Settings, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import type {
-  InstructionFileId,
-  PlatformId,
-  SavedPrompt,
-  ToolId,
-  UserProfile,
-} from "@/types";
+import {
+  INSTRUCTION_LABELS,
+  PLATFORM_LABELS,
+  TOOL_LABELS,
+} from "@/lib/catalog";
+import type { SavedPrompt, UserProfile } from "@/types";
 
 type SettingsTab = "profile" | "history";
-
-const PLATFORM_LABELS: Record<PlatformId, string> = {
-  cursor: "Cursor",
-  "claude-code": "Claude Code",
-  codex: "Codex CLI",
-  generic: "Chat or API",
-};
-const TOOL_LABELS: Record<ToolId, string> = {
-  context7: "Context7",
-  graphify: "Graphify",
-  headroom: "Headroom",
-  "web-search": "Web search",
-};
-const INSTRUCTION_LABELS: Record<InstructionFileId, string> = {
-  "agents-md": "AGENTS.md",
-  "claude-md": "CLAUDE.md",
-  "cursor-rules": "Cursor rules",
-};
 
 function toggle<T extends string>(values: T[], value: T): T[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
@@ -332,14 +313,17 @@ export default function SettingsPage({
           <div className="history-toolbar">
             <div>
               <h2>Prompt history</h2>
-              <p>Every researched prompt in {profile.workspace.name}, synced to your account.</p>
+              <p>
+                Full research archive for {profile.workspace.name}. Open any entry to resume answers
+                or copy the compiled prompt.
+              </p>
             </div>
             <label className="history-search">
               <Search size={15} />
               <input
                 aria-label="Search prompt history"
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search history"
+                placeholder="Search title or prompt"
                 value={search}
               />
             </label>
@@ -359,6 +343,13 @@ export default function SettingsPage({
                     <span>
                       <strong>{session.title}</strong>
                       <small>{session.prompt}</small>
+                      <span className="history-chips">
+                        {session.researchBrief.domain && (
+                          <em>{session.researchBrief.domain}</em>
+                        )}
+                        <em>{session.answers.length} answers</em>
+                        <em>{session.sources.length} sources</em>
+                      </span>
                     </span>
                     <span className="history-meta">
                       {new Intl.DateTimeFormat(undefined, {

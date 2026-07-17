@@ -1,6 +1,11 @@
 import { withAuth } from "@workos-inc/authkit-nextjs";
 import { NextResponse } from "next/server";
 
+import {
+  INSTRUCTION_FILE_IDS,
+  PLATFORM_IDS,
+  TOOL_IDS,
+} from "@/lib/catalog";
 import { getOrCreateProfile, saveProfile } from "@/lib/db";
 import type {
   DetailLevel,
@@ -10,13 +15,9 @@ import type {
   UserProfile,
 } from "@/types";
 
-const PLATFORMS = new Set<PlatformId>(["cursor", "claude-code", "codex", "generic"]);
-const TOOLS = new Set<ToolId>(["context7", "graphify", "headroom", "web-search"]);
-const INSTRUCTION_FILES = new Set<InstructionFileId>([
-  "agents-md",
-  "claude-md",
-  "cursor-rules",
-]);
+const PLATFORMS = new Set<PlatformId>(PLATFORM_IDS);
+const TOOLS = new Set<ToolId>(TOOL_IDS);
+const INSTRUCTION_FILES = new Set<InstructionFileId>(INSTRUCTION_FILE_IDS);
 const DETAIL_LEVELS = new Set<DetailLevel>(["focused", "thorough", "exhaustive"]);
 
 function stringArray<T extends string>(value: unknown, allowed: Set<T>): T[] | null {

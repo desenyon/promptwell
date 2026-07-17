@@ -46,7 +46,15 @@ export interface PromptScore {
 export type AppStage = "draft" | "questions" | "result";
 
 export type PlatformId = "cursor" | "claude-code" | "codex" | "generic";
-export type ToolId = "context7" | "graphify" | "headroom" | "web-search";
+export type ToolId =
+  | "context7"
+  | "graphify"
+  | "headroom"
+  | "web-search"
+  | "mcp"
+  | "skills"
+  | "hooks"
+  | "optimization";
 export type InstructionFileId = "agents-md" | "claude-md" | "cursor-rules";
 export type DetailLevel = "focused" | "thorough" | "exhaustive";
 

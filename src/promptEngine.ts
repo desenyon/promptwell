@@ -22,50 +22,55 @@ function hasAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
-export function scorePrompt(prompt: string, answeredCount = 0): PromptScore {
-  if (!prompt.trim()) {
-    return {
-      artifact: 0,
-      context: 0,
-      constraints: 0,
-      verification: 0,
-      specificity: 0,
-    };
-  }
+const EMPTY_SCORE: PromptScore = {
+  artifact: 0,
+  context: 0,
+  constraints: 0,
+  verification: 0,
+  specificity: 0,
+};
 
-  const normalized = prompt.toLowerCase();
-  const words = prompt.trim().split(/\s+/).filter(Boolean).length;
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+export function scorePrompt(prompt: string, answeredCount = 0): PromptScore {
+  const trimmed = prompt.trim();
+  if (!trimmed) return { ...EMPTY_SCORE };
+
+  const normalized = trimmed.toLowerCase();
+  const words = trimmed.split(/\s+/).filter(Boolean).length;
+  // A few words is still an empty brief for scoring purposes.
+  if (words < 4) return { ...EMPTY_SCORE };
+
   const answerLift = Math.min(answeredCount * 8, 40);
 
   return {
-    artifact: Math.min(
-      100,
-      (hasAny(normalized, [/\b(write|build|create|produce|return|design|review)\b/]) ? 50 : 18) +
-        (hasAny(normalized, [/\b(memo|page|app|interface|article|plan|report|code|json|email)\b/]) ? 30 : 5) +
+    artifact: clampScore(
+      (hasAny(normalized, [/\b(write|build|create|produce|return|design|review)\b/]) ? 36 : 8) +
+        (hasAny(normalized, [/\b(memo|page|app|interface|article|plan|report|code|json|email)\b/])
+          ? 28
+          : 4) +
         Math.min(answerLift, 20),
     ),
-    context: Math.min(
-      100,
-      (hasAny(normalized, [/\b(for|audience|reader|user|customer|team|company)\b/]) ? 42 : 12) +
-        Math.min(words, 25) +
+    context: clampScore(
+      (hasAny(normalized, [/\b(for|audience|reader|user|customer|team|company)\b/]) ? 34 : 6) +
+        Math.min(Math.floor(words * 0.6), 22) +
         Math.min(answerLift, 32),
     ),
-    constraints: Math.min(
-      100,
-      (hasAny(normalized, [/\b(must|never|without|only|under|exactly|no )\b/]) ? 48 : 10) +
-        (/\d/.test(prompt) ? 20 : 0) +
+    constraints: clampScore(
+      (hasAny(normalized, [/\b(must|never|without|only|under|exactly|no )\b/]) ? 40 : 4) +
+        (/\d/.test(trimmed) ? 16 : 0) +
         Math.min(answerLift, 32),
     ),
-    verification: Math.min(
-      100,
-      (hasAny(normalized, [/\b(test|acceptance|criteria|pass|fail|verify|measure)\b/]) ? 62 : 8) +
+    verification: clampScore(
+      (hasAny(normalized, [/\b(test|acceptance|criteria|pass|fail|verify|measure)\b/]) ? 48 : 0) +
         Math.min(answerLift, 38),
     ),
-    specificity: Math.min(
-      100,
-      Math.max(8, Math.min(words * 2, 48)) +
-        (/\d|["“”]|`/.test(prompt) ? 18 : 0) -
-        GENERIC_TERMS.filter((term) => normalized.includes(term)).length * 5 +
+    specificity: clampScore(
+      Math.min(words * 1.4, 42) +
+        (/\d|["“”]|`/.test(trimmed) ? 16 : 0) -
+        GENERIC_TERMS.filter((term) => normalized.includes(term)).length * 6 +
         Math.min(answerLift, 34),
     ),
   };
@@ -160,13 +165,15 @@ ${practices || "1. No domain-specific practices were supplied. Verify current pr
 Use tools only when they improve evidence or reduce uncertainty. Follow this task-specific sequence:
 ${toolPlan || "1. Inspect the available context before choosing tools."}
 
-Tool routing rules:
-- Use Graphify first for architecture, dependency, ownership, path, or cross-file relationship questions when a graph is available. Distinguish extracted graph facts from inferred relationships.
-- Use Context7 for current, version-specific library and framework APIs. Resolve the exact library/version, then query only the relevant topic.
-- Use Headroom for long logs, file dumps, search results, or multi-agent context. Preserve retrieval handles and retrieve originals before high-risk conclusions.
-- Use web research for current external facts. Prefer primary sources and record which finding changed the implementation.
-- Use MCP for live systems, skills for reusable workflows, and hooks/tests for deterministic enforcement.
-- For optimization work, establish the metric, baseline, target, benchmark method, and regression threshold before changing behavior.
+Tool routing rules (use only tools listed above as available):
+- Graphify: query architecture, dependency, ownership, path, or cross-file relationships before broad search. Distinguish extracted graph facts from inference.
+- Context7: resolve the exact library/version, then query the narrow topic for current APIs instead of relying on memory.
+- Headroom: compress long logs, dumps, search results, or multi-agent context; retrieve originals before high-risk conclusions.
+- Web search: gather current external facts from primary sources and record which finding changed the plan.
+- MCP: use for live systems and current operational data; never as a substitute for local verification.
+- Skills: invoke matching reusable workflows instead of reinventing them.
+- Hooks: rely on deterministic enforcement already configured; do not emulate a hook with freeform model judgment.
+- Optimization: establish metric, baseline, target, benchmark method, and regression threshold before changing behavior.
 
 # EXECUTION PROTOCOL
 1. Restate the exact artifact, user-visible outcome, scope, non-goals, and definition of done in a concise working plan.

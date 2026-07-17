@@ -3,38 +3,13 @@
 import { ArrowLeft, ArrowRight, Check, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type {
-  InstructionFileId,
-  PlatformId,
-  ToolId,
-  UserProfile,
-} from "@/types";
-
-interface SelectOption<T extends string> {
-  id: T;
-  label: string;
-  description: string;
-}
-
-const PLATFORM_OPTIONS: SelectOption<PlatformId>[] = [
-  { id: "cursor", label: "Cursor", description: "Rules, skills, MCP, and agent workflows" },
-  { id: "claude-code", label: "Claude Code", description: "CLAUDE.md, skills, hooks, and subagents" },
-  { id: "codex", label: "Codex CLI", description: "AGENTS.md, skills, MCP, and automations" },
-  { id: "generic", label: "Chat or API", description: "Portable prompts without coding-agent assumptions" },
-];
-
-const TOOL_OPTIONS: SelectOption<ToolId>[] = [
-  { id: "graphify", label: "Graphify", description: "Queryable codebase knowledge graphs" },
-  { id: "context7", label: "Context7", description: "Current, version-specific library documentation" },
-  { id: "headroom", label: "Headroom", description: "Context compression with source retrieval" },
-  { id: "web-search", label: "Web search", description: "Current external research and primary sources" },
-];
-
-const INSTRUCTION_OPTIONS: SelectOption<InstructionFileId>[] = [
-  { id: "agents-md", label: "AGENTS.md", description: "Cross-tool repository instructions" },
-  { id: "claude-md", label: "CLAUDE.md", description: "Claude-specific project memory" },
-  { id: "cursor-rules", label: "Cursor rules", description: "Scoped .cursor/rules/*.mdc guidance" },
-];
+import {
+  INSTRUCTION_OPTIONS,
+  PLATFORM_OPTIONS,
+  TOOL_OPTIONS,
+  type CatalogOption,
+} from "@/lib/catalog";
+import type { UserProfile } from "@/types";
 
 interface OnboardingProps {
   profile: UserProfile;
@@ -51,7 +26,7 @@ function SelectionGrid<T extends string>({
   selected,
   onChange,
 }: {
-  options: SelectOption<T>[];
+  options: CatalogOption<T>[];
   selected: T[];
   onChange: (values: T[]) => void;
 }) {
@@ -134,8 +109,8 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
             <span className="modal-kicker">Your working environment</span>
             <h1>{firstName ? `Set up your profile, ${firstName}.` : "Set up your prompting profile."}</h1>
             <p>
-              Choose every environment you use. Promptwell will adapt its questions, instruction
-              files, and execution protocol without asking again on every prompt.
+              Choose every environment you use — Cursor, Claude Code, Codex, or plain chat. Promptwell
+              remembers platforms and instruction systems so it does not re-ask on every prompt.
             </p>
             <SelectionGrid
               options={PLATFORM_OPTIONS}
@@ -150,8 +125,8 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
             <span className="modal-kicker">Available extensions</span>
             <h1>Which tools can your agents actually call?</h1>
             <p>
-              Tool instructions are conditional. Promptwell will never tell an agent to use an
-              extension you have not marked as available.
+              Mark Graphify, Context7, Headroom, MCP, skills, hooks, optimization workflows, and web
+              search only if they are truly available. Tool plans stay conditional on this list.
             </p>
             <SelectionGrid
               options={TOOL_OPTIONS}
@@ -166,8 +141,8 @@ export default function Onboarding({ profile, firstName, onComplete }: Onboardin
             <span className="modal-kicker">Persistent instructions</span>
             <h1>Where do your projects keep agent guidance?</h1>
             <p>
-              We will tell the agent which instruction chain to inspect and avoid duplicating
-              rules across incompatible formats.
+              AGENTS.md for cross-tool rules, CLAUDE.md for Claude-specific memory, Cursor rules for
+              scoped activation. We tell the agent which chain to inspect first.
             </p>
             <SelectionGrid
               options={INSTRUCTION_OPTIONS}

@@ -20,6 +20,7 @@ import { loadProfile, loadSessions, removeSession, saveSession, updateProfile } 
 import { logout } from "./app/auth/actions";
 import Onboarding from "./components/Onboarding";
 import SettingsPage from "./components/SettingsPage";
+import { PLATFORM_LABELS, TOOL_LABELS } from "./lib/catalog";
 import { compilePrompt, overallScore, scorePrompt } from "./promptEngine";
 import { generateQuestions } from "./provider";
 import type {
@@ -499,7 +500,10 @@ function App({ user }: AppProps) {
                   <div className="memory-strip">
                     <span>Remembered</span>
                     <div>
-                      {[...profile.platforms, ...profile.tools].map((item) => (
+                      {[
+                        ...profile.platforms.map((id) => PLATFORM_LABELS[id]),
+                        ...profile.tools.map((id) => TOOL_LABELS[id]),
+                      ].map((item) => (
                         <small key={item}>{item}</small>
                       ))}
                     </div>
@@ -513,7 +517,9 @@ function App({ user }: AppProps) {
                   <div className="progress-header">
                     <div>
                       <span className="progress-kicker">Adaptive interview</span>
-                      <strong>{questionIndex + 1} of {questions.length}</strong>
+                      <strong>
+                        {questionIndex + 1} of {questions.length}
+                      </strong>
                     </div>
                     <div className="progress-track">
                       <span style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} />
@@ -524,7 +530,7 @@ function App({ user }: AppProps) {
                     <Sparkles size={14} />
                     <span>
                       {researchBrief.domain || "Domain"} strategy · {researchSources.length} primary
-                      and current sources
+                      sources · memory skips known tools
                     </span>
                   </div>
 
@@ -534,13 +540,17 @@ function App({ user }: AppProps) {
                   </div>
 
                   <article className="question-card">
-                    <div className="question-number">{String(questionIndex + 1).padStart(2, "0")}</div>
+                    <div className="question-number">
+                      {String(questionIndex + 1).padStart(2, "0")}
+                    </div>
                     <div className="question-content">
                       <div className="question-meta">
                         <span className="principle">{activeQuestion.principle}</span>
-                        <span>One decision</span>
+                        <span>
+                          {activeQuestion.kind === "choice" ? "Pick one" : "Write the detail"}
+                        </span>
                       </div>
-                      <h2>{activeQuestion.prompt}</h2>
+                      <h2 className="question-title">{activeQuestion.prompt}</h2>
                       <div className="question-why">
                         <strong>What this changes</strong>
                         <p>{activeQuestion.why}</p>
@@ -549,11 +559,11 @@ function App({ user }: AppProps) {
                       {activeQuestion.kind === "choice" ? (
                         <div className="choice-list">
                           {activeQuestion.options?.map((option, index) => (
-                            <button key={option} onClick={() => submitAnswer(option)}>
+                            <button key={option} onClick={() => submitAnswer(option)} type="button">
                               <span className="choice-key">
                                 {String.fromCharCode(65 + index)}
                               </span>
-                              <span>{option}</span>
+                              <span className="choice-label">{option}</span>
                               <ChevronRight size={18} />
                             </button>
                           ))}
@@ -577,6 +587,7 @@ function App({ user }: AppProps) {
                               className="primary-button"
                               disabled={!draftAnswer.trim()}
                               onClick={() => submitAnswer()}
+                              type="button"
                             >
                               Save answer <ArrowRight size={17} />
                             </button>
@@ -585,8 +596,8 @@ function App({ user }: AppProps) {
                       )}
                     </div>
                   </article>
-                  <button className="skip-button" onClick={skipQuestion}>
-                    Memory does not need this answer
+                  <button className="skip-button" onClick={skipQuestion} type="button">
+                    Memory already covers this
                   </button>
                 </div>
               )}
@@ -661,22 +672,34 @@ function App({ user }: AppProps) {
       </main>
 
       {view === "workspace" && (
-        <aside className={`quality-panel ${qualityOpen ? "quality-panel--open" : ""}`}>
+        <aside
+          className={`quality-panel ${qualityOpen ? "quality-panel--open" : ""} ${
+            totalScore === 0 ? "quality-panel--zero" : ""
+          }`}
+        >
           <div className="quality-header">
             <div>
               <span>Prompt health</span>
-              <strong>{totalScore}<small>/100</small></strong>
+              <strong>
+                {totalScore}
+                <small>/100</small>
+              </strong>
             </div>
             <Sparkles size={18} />
           </div>
           <div className="quality-spine" aria-label={`Prompt quality ${totalScore} out of 100`}>
-            <span style={{ height: `${totalScore}%` }} />
+            <span style={{ height: totalScore === 0 ? "0%" : `${totalScore}%` }} />
           </div>
           <div className="metric-list">
             {Object.entries(score).map(([label, value]) => (
               <div className="metric" key={label}>
-                <div><span>{label}</span><strong>{value}</strong></div>
-                <div className="metric-track"><span style={{ width: `${value}%` }} /></div>
+                <div>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+                <div className={`metric-track ${value === 0 ? "metric-track--empty" : ""}`}>
+                  <span style={{ width: value === 0 ? "0%" : `${value}%` }} />
+                </div>
               </div>
             ))}
           </div>
@@ -684,7 +707,7 @@ function App({ user }: AppProps) {
             <span>{prompt.trim() ? "Next leverage point" : "Waiting for a prompt"}</span>
             <p>
               {!prompt.trim()
-                ? "Prompt health starts at zero. Add a rough request to reveal what is already specified and what is missing."
+                ? "Prompt health starts at zero. Paste a rough request to reveal what is already specified and what is missing."
                 : score.verification < 50
                   ? "Define what would make the output fail. An invisible rubric cannot guide the result."
                   : "The brief is constrained enough to produce a specific, auditable result."}
