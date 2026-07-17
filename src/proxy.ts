@@ -5,5 +5,5 @@ export default authkitProxy({
 });
 
 export const config = {
-  matcher: ["/", "/api/refine"],
+  matcher: ["/", "/api/:path*"],
 };
