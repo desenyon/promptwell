@@ -19,6 +19,7 @@ import {
 import { loadProfile, loadSessions, removeSession, saveSession, updateProfile } from "./account";
 import { logout } from "./app/auth/actions";
 import Onboarding from "./components/Onboarding";
+import ResearchingScene from "./components/ResearchingScene";
 import SettingsPage from "./components/SettingsPage";
 import { PLATFORM_LABELS, TOOL_LABELS } from "./lib/catalog";
 import { compilePrompt, overallScore, scorePrompt } from "./promptEngine";
@@ -459,57 +460,61 @@ function App({ user }: AppProps) {
           ) : (
             <>
               {stage === "draft" && (
-                <div className="draft-view">
-                  <div className="eyebrow"><span>01</span> Rough material</div>
-                  <h1>What are you trying<br />to make?</h1>
-                  <p className="lead">
-                    Paste the prompt you have. We’ll research the domain, apply your saved tool
-                    profile, and find only the decisions memory cannot answer.
-                  </p>
+                isAnalyzing ? (
+                  <ResearchingScene />
+                ) : (
+                  <div className="draft-view">
+                    <div className="eyebrow"><span>01</span> Rough material</div>
+                    <h1>What are you trying<br />to make?</h1>
+                    <p className="lead">
+                      Paste the prompt you have. We’ll research the domain, apply your saved tool
+                      profile, and find only the decisions memory cannot answer.
+                    </p>
 
-                  <div className="prompt-composer">
-                    <textarea
-                      value={prompt}
-                      onChange={(event) => {
-                        setPrompt(event.target.value);
-                        setError("");
-                      }}
-                      placeholder="Paste a rough prompt, brief, or half-formed idea…"
-                      aria-label="Your rough prompt"
-                      autoFocus
-                    />
-                    <div className="composer-footer">
-                      <button className="text-button" onClick={() => setPrompt(EXAMPLE_PROMPT)}>
-                        Use an example
-                      </button>
-                      <div className="composer-submit">
-                        <span>{prompt.length.toLocaleString()} / 12,000</span>
-                        <button
-                          className="primary-button"
-                          onClick={analyzePrompt}
-                          disabled={isAnalyzing}
-                        >
-                          {isAnalyzing ? "Researching deeply…" : "Research prompt"}
-                          {!isAnalyzing && <ArrowRight size={17} />}
+                    <div className="prompt-composer">
+                      <textarea
+                        value={prompt}
+                        onChange={(event) => {
+                          setPrompt(event.target.value);
+                          setError("");
+                        }}
+                        placeholder="Paste a rough prompt, brief, or half-formed idea…"
+                        aria-label="Your rough prompt"
+                        autoFocus
+                      />
+                      <div className="composer-footer">
+                        <button className="text-button" onClick={() => setPrompt(EXAMPLE_PROMPT)}>
+                          Use an example
                         </button>
+                        <div className="composer-submit">
+                          <span>{prompt.length.toLocaleString()} / 12,000</span>
+                          <button
+                            className="primary-button"
+                            onClick={analyzePrompt}
+                            disabled={isAnalyzing}
+                          >
+                            Research prompt
+                            <ArrowRight size={17} />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  {error && <p className="error-message">{error}</p>}
+                    {error && <p className="error-message">{error}</p>}
 
-                  <div className="memory-strip">
-                    <span>Remembered</span>
-                    <div>
-                      {[
-                        ...profile.platforms.map((id) => PLATFORM_LABELS[id]),
-                        ...profile.tools.map((id) => TOOL_LABELS[id]),
-                      ].map((item) => (
-                        <small key={item}>{item}</small>
-                      ))}
+                    <div className="memory-strip">
+                      <span>Remembered</span>
+                      <div>
+                        {[
+                          ...profile.platforms.map((id) => PLATFORM_LABELS[id]),
+                          ...profile.tools.map((id) => TOOL_LABELS[id]),
+                        ].map((item) => (
+                          <small key={item}>{item}</small>
+                        ))}
+                      </div>
+                      <button onClick={() => openSettings("settings")}>Edit defaults</button>
                     </div>
-                    <button onClick={() => openSettings("settings")}>Edit defaults</button>
                   </div>
-                </div>
+                )
               )}
 
               {stage === "questions" && activeQuestion && (
