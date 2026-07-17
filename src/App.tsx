@@ -22,8 +22,15 @@ import Onboarding from "./components/Onboarding";
 import ResearchingScene from "./components/ResearchingScene";
 import SettingsPage from "./components/SettingsPage";
 import { PLATFORM_LABELS, TOOL_LABELS } from "./lib/catalog";
-import { compilePrompt, overallScore, scorePrompt } from "./promptEngine";
-import { generateQuestions } from "./provider";
+import {
+  MAX_QUALITY_ROUNDS,
+  QUALITY_GATE,
+  compilePrompt,
+  overallScore,
+  scoreSpecification,
+  weakDimensions,
+} from "./promptEngine";
+import { generateFollowUpQuestions, generateQuestions } from "./provider";
 import type {
   Answer,
   AppStage,
@@ -82,12 +89,17 @@ function App({ user }: AppProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [qualityRound, setQualityRound] = useState(1);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>("idle");
 
-  const score = useMemo(() => scorePrompt(prompt, answers.length), [prompt, answers.length]);
+  const score = useMemo(
+    () => scoreSpecification(prompt, answers, questions, researchBrief),
+    [answers, prompt, questions, researchBrief],
+  );
   const totalScore = overallScore(score);
+  const scoreGaps = useMemo(() => weakDimensions(score), [score]);
   const compiledPrompt = useMemo(
     () =>
       profile
@@ -213,6 +225,7 @@ function App({ user }: AppProps) {
       setResearchBrief(result.researchBrief);
       setAnswers([]);
       setQuestionIndex(0);
+      setQualityRound(1);
       setActivePromptId(sessionId);
       setActiveCreatedAt(createdAt);
       setStage("questions");
@@ -246,28 +259,190 @@ function App({ user }: AppProps) {
     }
   }
 
+  async function continueUntilQualityGate(
+    nextAnswers: Answer[],
+    currentQuestions: Question[],
+    currentBrief: ResearchBrief,
+    currentSources: ResearchSource[],
+  ) {
+    let workingAnswers = nextAnswers;
+    let workingQuestions = currentQuestions;
+    let workingBrief = currentBrief;
+    let workingSources = currentSources;
+    let round = qualityRound;
+
+    while (true) {
+      const nextScore = scoreSpecification(prompt, workingAnswers, workingQuestions, workingBrief);
+      const nextTotal = overallScore(nextScore);
+
+      if (nextTotal >= QUALITY_GATE) {
+        setAnswers(workingAnswers);
+        setQuestions(workingQuestions);
+        setResearchBrief(workingBrief);
+        setResearchSources(workingSources);
+        setQualityRound(round);
+        const session = createSessionWith(
+          workingAnswers,
+          workingQuestions,
+          workingBrief,
+          workingSources,
+          "result",
+        );
+        if (session) persistSession(session);
+        setStage("result");
+        return;
+      }
+
+      if (round >= MAX_QUALITY_ROUNDS) {
+        setError(
+          `Quality is still ${nextTotal}/100 after ${MAX_QUALITY_ROUNDS} rounds. Answer the next gap questions to reach ${QUALITY_GATE}.`,
+        );
+      }
+
+      setIsAnalyzing(true);
+      setError("");
+      try {
+        const followUp = await generateFollowUpQuestions(prompt, {
+          answers: workingAnswers,
+          questions: workingQuestions,
+          score: nextScore,
+          overall: nextTotal,
+          weakDimensions: weakDimensions(nextScore),
+          researchBrief: workingBrief,
+          round: round + 1,
+        });
+
+        const existingIds = new Set(workingQuestions.map((question) => question.id));
+        const freshQuestions = followUp.questions.filter((question) => !existingIds.has(question.id));
+        if (freshQuestions.length === 0) {
+          throw new Error("Quality iteration returned no new questions.");
+        }
+
+        workingQuestions = [...workingQuestions, ...freshQuestions];
+        workingBrief = {
+          domain: followUp.researchBrief.domain || workingBrief.domain,
+          taskType: followUp.researchBrief.taskType || workingBrief.taskType,
+          practices: [
+            ...workingBrief.practices,
+            ...followUp.researchBrief.practices.filter(
+              (practice) =>
+                !workingBrief.practices.some((existing) => existing.title === practice.title),
+            ),
+          ].slice(0, 6),
+          toolPlan: [
+            ...new Set([...workingBrief.toolPlan, ...followUp.researchBrief.toolPlan]),
+          ].slice(0, 8),
+          verificationPlan: [
+            ...new Set([
+              ...workingBrief.verificationPlan,
+              ...followUp.researchBrief.verificationPlan,
+            ]),
+          ].slice(0, 8),
+        };
+        workingSources = [
+          ...workingSources,
+          ...followUp.sources.filter(
+            (source) => !workingSources.some((existing) => existing.url === source.url),
+          ),
+        ].slice(0, 8);
+        round += 1;
+
+        setAnswers(workingAnswers);
+        setQuestions(workingQuestions);
+        setResearchBrief(workingBrief);
+        setResearchSources(workingSources);
+        setQualityRound(round);
+        setQuestionIndex(workingQuestions.length - freshQuestions.length);
+        setStage("questions");
+
+        const session = createSessionWith(
+          workingAnswers,
+          workingQuestions,
+          workingBrief,
+          workingSources,
+          "questions",
+        );
+        if (session) persistSession(session);
+        return;
+      } catch (requestError) {
+        setAnswers(workingAnswers);
+        setQuestions(workingQuestions);
+        setResearchBrief(workingBrief);
+        setResearchSources(workingSources);
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Quality iteration failed. Try answering again.",
+        );
+        setStage("questions");
+        setQuestionIndex(Math.max(workingQuestions.length - 1, 0));
+        return;
+      } finally {
+        setIsAnalyzing(false);
+      }
+    }
+  }
+
+  function createSessionWith(
+    nextAnswers: Answer[],
+    nextQuestions: Question[],
+    nextBrief: ResearchBrief,
+    nextSources: ResearchSource[],
+    nextStage: Exclude<AppStage, "draft">,
+  ): SavedPrompt | null {
+    if (!profile || !activePromptId) return null;
+    const now = new Date().toISOString();
+    return {
+      id: activePromptId,
+      workspaceId: profile.workspace.id,
+      title: titleFromPrompt(prompt),
+      prompt: prompt.trim(),
+      questions: nextQuestions,
+      answers: nextAnswers,
+      sources: nextSources,
+      researchBrief: nextBrief,
+      compiledPrompt: compilePrompt(
+        prompt,
+        nextQuestions,
+        nextAnswers,
+        profile,
+        nextBrief,
+        nextSources,
+      ),
+      stage: nextStage,
+      createdAt: activeCreatedAt ?? now,
+      updatedAt: now,
+    };
+  }
+
   function submitAnswer(value = draftAnswer) {
     if (!activeQuestion || !value.trim()) return;
     const nextAnswers = [
       ...answers.filter((answer) => answer.questionId !== activeQuestion.id),
       { questionId: activeQuestion.id, value: value.trim() },
     ];
-    const nextStage = questionIndex === questions.length - 1 ? "result" : "questions";
     setAnswers(nextAnswers);
     setDraftAnswer("");
-    const session = createSession(nextAnswers, nextStage);
-    if (session) persistSession(session);
 
-    if (nextStage === "result") setStage("result");
-    else setQuestionIndex((current) => current + 1);
+    if (questionIndex < questions.length - 1) {
+      const session = createSession(nextAnswers, "questions");
+      if (session) persistSession(session);
+      setQuestionIndex((current) => current + 1);
+      return;
+    }
+
+    void continueUntilQualityGate(nextAnswers, questions, researchBrief, researchSources);
   }
 
   function skipQuestion() {
-    const nextStage = questionIndex === questions.length - 1 ? "result" : "questions";
-    const session = createSession(answers, nextStage);
-    if (session) persistSession(session);
-    if (nextStage === "result") setStage("result");
-    else setQuestionIndex((current) => current + 1);
+    if (questionIndex < questions.length - 1) {
+      const session = createSession(answers, "questions");
+      if (session) persistSession(session);
+      setQuestionIndex((current) => current + 1);
+      return;
+    }
+
+    void continueUntilQualityGate(answers, questions, researchBrief, researchSources);
   }
 
   function resetWorkspace() {
@@ -278,6 +453,7 @@ function App({ user }: AppProps) {
     setResearchBrief(EMPTY_RESEARCH_BRIEF);
     setAnswers([]);
     setQuestionIndex(0);
+    setQualityRound(1);
     setDraftAnswer("");
     setError("");
     setStage("draft");
@@ -459,10 +635,11 @@ function App({ user }: AppProps) {
             />
           ) : (
             <>
-              {stage === "draft" && (
-                isAnalyzing ? (
-                  <ResearchingScene />
-                ) : (
+              {isAnalyzing && (stage === "draft" || stage === "questions") && (
+                <ResearchingScene />
+              )}
+
+              {stage === "draft" && !isAnalyzing && (
                   <div className="draft-view">
                     <div className="eyebrow"><span>01</span> Rough material</div>
                     <h1>What are you trying<br />to make?</h1>
@@ -514,14 +691,15 @@ function App({ user }: AppProps) {
                       <button onClick={() => openSettings("settings")}>Edit defaults</button>
                     </div>
                   </div>
-                )
               )}
 
-              {stage === "questions" && activeQuestion && (
+              {stage === "questions" && !isAnalyzing && activeQuestion && (
                 <div className="question-view">
                   <div className="progress-header">
                     <div>
-                      <span className="progress-kicker">Adaptive interview</span>
+                      <span className="progress-kicker">
+                        Adaptive interview · gate {QUALITY_GATE}+ · round {qualityRound}
+                      </span>
                       <strong>
                         {questionIndex + 1} of {questions.length}
                       </strong>
@@ -534,10 +712,14 @@ function App({ user }: AppProps) {
                   <div className="research-status">
                     <Sparkles size={14} />
                     <span>
-                      {researchBrief.domain || "Domain"} strategy · {researchSources.length} primary
-                      sources · memory skips known tools
+                      Score {totalScore}/{QUALITY_GATE} required ·{" "}
+                      {scoreGaps.length > 0
+                        ? `closing ${scoreGaps.join(", ")}`
+                        : "quality gate clear"}{" "}
+                      · {researchSources.length} sources
                     </span>
                   </div>
+                  {error && <p className="error-message">{error}</p>}
 
                   <div className="source-card">
                     <span>Working brief</span>
@@ -614,9 +796,13 @@ function App({ user }: AppProps) {
                       <div className="eyebrow"><span>03</span> Execution-ready specification</div>
                       <h1>Your prompt<br />now holds water.</h1>
                     </div>
-                    <div className="score-stamp">
+                    <div className={`score-stamp ${totalScore >= QUALITY_GATE ? "score-stamp--pass" : ""}`}>
                       <span>{totalScore}</span>
-                      <small>quality<br />score</small>
+                      <small>
+                        gate {QUALITY_GATE}+
+                        <br />
+                        cleared
+                      </small>
                     </div>
                   </div>
 
@@ -709,13 +895,21 @@ function App({ user }: AppProps) {
             ))}
           </div>
           <div className="quality-insight">
-            <span>{prompt.trim() ? "Next leverage point" : "Waiting for a prompt"}</span>
+            <span>
+              {!prompt.trim()
+                ? "Waiting for a prompt"
+                : totalScore >= QUALITY_GATE
+                  ? "Quality gate cleared"
+                  : `Gate ${QUALITY_GATE} · ${QUALITY_GATE - totalScore} points short`}
+            </span>
             <p>
               {!prompt.trim()
                 ? "Prompt health starts at zero. Paste a rough request to reveal what is already specified and what is missing."
-                : score.verification < 50
-                  ? "Define what would make the output fail. An invisible rubric cannot guide the result."
-                  : "The brief is constrained enough to produce a specific, auditable result."}
+                : totalScore >= QUALITY_GATE
+                  ? "This specification meets the Promptwell bar and is ready to copy."
+                  : scoreGaps.length > 0
+                    ? `Keep iterating on ${scoreGaps.join(", ")}. Below ${QUALITY_GATE} is not acceptable.`
+                    : `Keep answering until the score reaches ${QUALITY_GATE}.`}
             </p>
           </div>
         </aside>

@@ -822,6 +822,16 @@ p {
   text-transform: uppercase;
 }
 
+.score-stamp--pass {
+  border-color: var(--success);
+  background: #eef8f3;
+  box-shadow: 6px 6px 0 rgba(20, 132, 94, 0.18);
+}
+
+.score-stamp--pass > span {
+  color: var(--success);
+}
+
 .result-toolbar {
   min-height: 50px;
   display: flex;

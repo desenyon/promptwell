@@ -7,6 +7,9 @@ import type {
   UserProfile,
 } from "./types";
 
+export const QUALITY_GATE = 85;
+export const MAX_QUALITY_ROUNDS = 4;
+
 const GENERIC_TERMS = [
   "good",
   "great",
@@ -17,6 +20,14 @@ const GENERIC_TERMS = [
   "comprehensive",
   "robust",
 ];
+
+const SCORE_DIMENSIONS = [
+  "artifact",
+  "context",
+  "constraints",
+  "verification",
+  "specificity",
+] as const;
 
 function hasAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
@@ -34,44 +45,125 @@ function clampScore(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function answerCorpus(answers: Answer[]): string {
+  return answers
+    .map((answer) => answer.value.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function concreteSignal(text: string): number {
+  if (!text.trim()) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const numbers = (text.match(/\d+/g) ?? []).length;
+  const paths = (text.match(/[./][\w.-]+/g) ?? []).length;
+  const quotes = (text.match(/["“”'`]/g) ?? []).length;
+  return Math.min(28, Math.floor(words / 4) + numbers * 3 + paths * 2 + Math.min(quotes, 4));
+}
+
 export function scorePrompt(prompt: string, answeredCount = 0): PromptScore {
+  const syntheticAnswers: Answer[] = Array.from({ length: answeredCount }, (_, index) => ({
+    questionId: `lift-${index}`,
+    value: "Concrete decision with measurable acceptance criteria and exact scope boundaries.",
+  }));
+  return scoreSpecification(prompt, syntheticAnswers, [], {
+    domain: "",
+    taskType: "",
+    practices: [],
+    toolPlan: [],
+    verificationPlan: [],
+  });
+}
+
+export function scoreSpecification(
+  prompt: string,
+  answers: Answer[],
+  questions: Question[] = [],
+  researchBrief: ResearchBrief = {
+    domain: "",
+    taskType: "",
+    practices: [],
+    toolPlan: [],
+    verificationPlan: [],
+  },
+): PromptScore {
   const trimmed = prompt.trim();
   if (!trimmed) return { ...EMPTY_SCORE };
 
+  const answerList = answers;
+  const answeredCount = answerList.length;
   const normalized = trimmed.toLowerCase();
   const words = trimmed.split(/\s+/).filter(Boolean).length;
-  // A few words is still an empty brief for scoring purposes.
-  if (words < 4) return { ...EMPTY_SCORE };
+  if (words < 4 && answeredCount === 0) return { ...EMPTY_SCORE };
 
-  const answerLift = Math.min(answeredCount * 8, 40);
+  const decisions = answerCorpus(answerList);
+  const decisionText = decisions.toLowerCase();
+  const combined = `${normalized}\n${decisionText}`;
+  const answeredQuestions = questions.filter((question) =>
+    answerList.some((answer) => answer.questionId === question.id && answer.value.trim()),
+  );
+  const principleText = answeredQuestions.map((question) => question.principle.toLowerCase()).join(" ");
+  const concrete = concreteSignal(`${trimmed}\n${decisions}`);
+  const answerLift = Math.min(answeredCount * 7, 36);
+  const researchLift = Math.min(
+    researchBrief.practices.length * 4 +
+      researchBrief.toolPlan.length * 3 +
+      researchBrief.verificationPlan.length * 4,
+    28,
+  );
+
+  const principleBoost = (patterns: RegExp[]) =>
+    hasAny(principleText, patterns) || hasAny(decisionText, patterns) ? 14 : 0;
 
   return {
     artifact: clampScore(
-      (hasAny(normalized, [/\b(write|build|create|produce|return|design|review)\b/]) ? 36 : 8) +
-        (hasAny(normalized, [/\b(memo|page|app|interface|article|plan|report|code|json|email)\b/])
-          ? 28
+      (hasAny(combined, [/\b(write|build|create|produce|return|design|review|ship)\b/]) ? 28 : 6) +
+        (hasAny(combined, [
+          /\b(memo|page|app|interface|article|plan|report|code|json|email|prompt|component|api)\b/,
+        ])
+          ? 24
           : 4) +
-        Math.min(answerLift, 20),
+        principleBoost([/\bartifact|outcome|deliverable|result\b/]) +
+        Math.min(answerLift, 18) +
+        Math.min(researchLift, 10) +
+        Math.min(concrete, 12),
     ),
     context: clampScore(
-      (hasAny(normalized, [/\b(for|audience|reader|user|customer|team|company)\b/]) ? 34 : 6) +
-        Math.min(Math.floor(words * 0.6), 22) +
-        Math.min(answerLift, 32),
+      (hasAny(combined, [/\b(for|audience|reader|user|customer|team|company|stack|repo|workspace)\b/])
+        ? 26
+        : 4) +
+        Math.min(Math.floor(words * 0.45), 16) +
+        principleBoost([/\bcontext|environment|audience|platform\b/]) +
+        Math.min(answerLift, 22) +
+        Math.min(researchBrief.toolPlan.length * 5, 16) +
+        Math.min(concrete, 10),
     ),
     constraints: clampScore(
-      (hasAny(normalized, [/\b(must|never|without|only|under|exactly|no )\b/]) ? 40 : 4) +
-        (/\d/.test(trimmed) ? 16 : 0) +
-        Math.min(answerLift, 32),
+      (hasAny(combined, [/\b(must|never|without|only|under|exactly|no |non-goal|scope|boundary)\b/])
+        ? 30
+        : 4) +
+        (/\d/.test(`${trimmed}${decisions}`) ? 14 : 0) +
+        principleBoost([/\bconstraint|scope|limit|permission|non-goal\b/]) +
+        Math.min(answerLift, 22) +
+        Math.min(researchLift, 10) +
+        Math.min(concrete, 12),
     ),
     verification: clampScore(
-      (hasAny(normalized, [/\b(test|acceptance|criteria|pass|fail|verify|measure)\b/]) ? 48 : 0) +
-        Math.min(answerLift, 38),
+      (hasAny(combined, [/\b(test|acceptance|criteria|pass|fail|verify|measure|checklist|rubric)\b/])
+        ? 34
+        : 0) +
+        principleBoost([/\bverif|accept|criteria|quality|done\b/]) +
+        Math.min(answerLift, 24) +
+        Math.min(researchBrief.verificationPlan.length * 8, 28) +
+        Math.min(concrete, 10),
     ),
     specificity: clampScore(
-      Math.min(words * 1.4, 42) +
-        (/\d|["“”]|`/.test(trimmed) ? 16 : 0) -
-        GENERIC_TERMS.filter((term) => normalized.includes(term)).length * 6 +
-        Math.min(answerLift, 34),
+      Math.min(words * 1.1, 30) +
+        concrete +
+        (hasAny(combined, GENERIC_TERMS.map((term) => new RegExp(`\\b${term}\\b`))) ? -12 : 8) +
+        principleBoost([/\bspecific|detail|example|contract|format\b/]) +
+        Math.min(answerLift, 20) +
+        Math.min(researchBrief.practices.length * 5, 18),
     ),
   };
 }
@@ -79,6 +171,10 @@ export function scorePrompt(prompt: string, answeredCount = 0): PromptScore {
 export function overallScore(score: PromptScore): number {
   const values = Object.values(score);
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+export function weakDimensions(score: PromptScore, gate = QUALITY_GATE): Array<keyof PromptScore> {
+  return SCORE_DIMENSIONS.filter((dimension) => score[dimension] < gate);
 }
 
 function list(values: string[], fallback: string): string {

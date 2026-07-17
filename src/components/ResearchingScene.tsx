@@ -6,6 +6,7 @@ const PHASES = [
   "Reading the rough request",
   "Searching primary sources",
   "Mapping your tool stack",
+  "Closing gaps below the 85 gate",
   "Drafting adaptive questions",
   "Locking verification criteria",
 ] as const;

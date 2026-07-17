@@ -1,4 +1,10 @@
-import type { Question, ResearchBrief, ResearchSource } from "./types";
+import type {
+  Answer,
+  PromptScore,
+  Question,
+  ResearchBrief,
+  ResearchSource,
+} from "./types";
 
 function validateQuestions(value: unknown): Question[] {
   if (!value || typeof value !== "object" || !("questions" in value)) {
@@ -29,13 +35,23 @@ function validateQuestions(value: unknown): Question[] {
   return questions.slice(0, 8);
 }
 
-interface RefineResponse {
+export interface RefineResponse {
   questions: Question[];
   sources: ResearchSource[];
   researchBrief: ResearchBrief;
 }
 
-function validateSources(value: unknown): ResearchSource[] {
+export interface IterateRequest {
+  answers: Answer[];
+  questions: Question[];
+  score: PromptScore;
+  overall: number;
+  weakDimensions: string[];
+  researchBrief: ResearchBrief;
+  round: number;
+}
+
+function validateSources(value: unknown, allowEmpty = false): ResearchSource[] {
   if (!Array.isArray(value)) {
     throw new Error("Prompt research did not include sources.");
   }
@@ -58,7 +74,7 @@ function validateSources(value: unknown): ResearchSource[] {
     }
   });
 
-  if (sources.length === 0) {
+  if (!allowEmpty && sources.length === 0) {
     throw new Error("Prompt research returned no valid sources.");
   }
   return sources.slice(0, 6);
@@ -105,13 +121,17 @@ function validateResearchBrief(value: unknown): ResearchBrief {
   };
 }
 
-export async function generateQuestions(prompt: string): Promise<RefineResponse> {
+async function requestRefine(
+  prompt: string,
+  payload: Record<string, unknown> = {},
+  allowEmptySources = false,
+): Promise<RefineResponse> {
   const response = await fetch("/api/refine", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, ...payload }),
   });
 
   if (!response.ok) {
@@ -127,7 +147,45 @@ export async function generateQuestions(prompt: string): Promise<RefineResponse>
 
   return {
     questions: validateQuestions({ questions: body.questions }),
-    sources: validateSources(body.sources),
+    sources: validateSources(body.sources, allowEmptySources),
     researchBrief: validateResearchBrief(body.researchBrief),
   };
+}
+
+export async function generateQuestions(prompt: string): Promise<RefineResponse> {
+  return requestRefine(prompt);
+}
+
+export async function generateFollowUpQuestions(
+  prompt: string,
+  iteration: IterateRequest,
+): Promise<RefineResponse> {
+  return requestRefine(
+    prompt,
+    {
+      mode: "iterate",
+      iteration: {
+        round: iteration.round,
+        overall: iteration.overall,
+        score: iteration.score,
+        weakDimensions: iteration.weakDimensions,
+        priorQuestionIds: iteration.questions.map((question) => question.id),
+        answeredDecisions: iteration.questions
+          .map((question) => {
+            const answer = iteration.answers.find((item) => item.questionId === question.id);
+            if (!answer?.value.trim()) return null;
+            return {
+              id: question.id,
+              principle: question.principle,
+              question: question.prompt,
+              answer: answer.value.trim(),
+            };
+          })
+          .filter(Boolean),
+        researchBrief: iteration.researchBrief,
+        qualityGate: 85,
+      },
+    },
+    true,
+  );
 }
