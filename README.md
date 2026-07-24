@@ -18,12 +18,17 @@ Promptwell researches a rough request, applies the bundled prompting guide and s
 4. Add a newly created `OPENAI_API_KEY`. Do not reuse a key that has appeared in chat, logs, or source control.
 5. Add `http://localhost:3000/auth/callback` to the WorkOS redirect allowlist.
 6. Run `npm install` and `npm run dev`.
+7. Optional checks: `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
+
+## Quality gate
+
+Research keeps iterating until the local quality score reaches **85** or the engine hits **4** research rounds. If the gate is still unmet after those rounds, Promptwell stops calling the research API, shows the best compiled prompt, and surfaces a clear score warning so the monthly OpenAI allowance is not burned on open-ended loops.
 
 ## Spending controls
 
 Set the OpenAI project’s monthly budget to `$13` in the OpenAI dashboard. That provider-side project budget is the authoritative cap because it still applies across deploys, restarts, and any other use of the key.
 
-`OPENAI_MONTHLY_REQUEST_CAP=250` provides a conservative in-process backstop based on current GPT-5.4-mini and web-search pricing. It resets when a server instance restarts and is not a substitute for the provider-side project budget.
+`OPENAI_MONTHLY_REQUEST_CAP=250` provides a conservative in-process backstop based on current GPT-5.4-mini and web-search pricing. Only successful provider responses count toward this cap. It resets when a server instance restarts and is not a substitute for the provider-side project budget.
 
 ## Security boundaries
 
