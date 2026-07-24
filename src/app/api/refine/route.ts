@@ -69,18 +69,29 @@ function readEngineConfig(): EngineConfig {
   };
 }
 
-function reserveMonthlyRequest(cap: number): boolean {
-  const month = new Date().toISOString().slice(0, 7);
+function currentMonthKey(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function canReserveMonthlyRequest(cap: number): boolean {
+  const month = currentMonthKey();
+  const usage = globalForRateLimit.promptwellMonthlyUsage;
+  if (!usage || usage.month !== month) return true;
+  return usage.requests < cap;
+}
+
+function commitMonthlyRequest(cap: number): void {
+  const month = currentMonthKey();
   const usage = globalForRateLimit.promptwellMonthlyUsage;
 
   if (!usage || usage.month !== month) {
     globalForRateLimit.promptwellMonthlyUsage = { month, requests: 1 };
-    return true;
+    return;
   }
 
-  if (usage.requests >= cap) return false;
-  usage.requests += 1;
-  return true;
+  if (usage.requests < cap) {
+    usage.requests += 1;
+  }
 }
 
 function isRateLimited(userId: string, requestLimit: number, windowMs: number): boolean {
@@ -156,7 +167,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!reserveMonthlyRequest(config.monthlyRequestCap)) {
+  if (!canReserveMonthlyRequest(config.monthlyRequestCap)) {
     return NextResponse.json(
       { error: "This month’s research allowance has been reached." },
       { status: 429 },
@@ -406,6 +417,8 @@ Hard requirements for this run:
     ) {
       throw new Error("Questions, research sources, or strategy are missing");
     }
+    // Count only successful provider responses against the monthly allowance.
+    commitMonthlyRequest(config.monthlyRequestCap);
     return NextResponse.json(result);
   } catch (error) {
     console.error("[Prompt research] Invalid structured response", error);

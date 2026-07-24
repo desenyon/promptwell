@@ -265,7 +265,7 @@ function App({ user }: AppProps) {
     currentBrief: ResearchBrief,
     currentSources: ResearchSource[],
   ) {
-    let workingAnswers = nextAnswers;
+    const workingAnswers = nextAnswers;
     let workingQuestions = currentQuestions;
     let workingBrief = currentBrief;
     let workingSources = currentSources;
@@ -281,6 +281,7 @@ function App({ user }: AppProps) {
         setResearchBrief(workingBrief);
         setResearchSources(workingSources);
         setQualityRound(round);
+        setError("");
         const session = createSessionWith(
           workingAnswers,
           workingQuestions,
@@ -293,10 +294,27 @@ function App({ user }: AppProps) {
         return;
       }
 
+      // Hard stop after the configured round budget. Continuing to call the
+      // research API would burn the monthly allowance without a guaranteed score lift.
       if (round >= MAX_QUALITY_ROUNDS) {
+        setAnswers(workingAnswers);
+        setQuestions(workingQuestions);
+        setResearchBrief(workingBrief);
+        setResearchSources(workingSources);
+        setQualityRound(round);
         setError(
-          `Quality is still ${nextTotal}/100 after ${MAX_QUALITY_ROUNDS} rounds. Answer the next gap questions to reach ${QUALITY_GATE}.`,
+          `Quality is ${nextTotal}/100 after ${MAX_QUALITY_ROUNDS} research rounds (gate ${QUALITY_GATE}). The best available prompt is ready — review the score panel and refine manually if needed.`,
         );
+        const session = createSessionWith(
+          workingAnswers,
+          workingQuestions,
+          workingBrief,
+          workingSources,
+          "result",
+        );
+        if (session) persistSession(session);
+        setStage("result");
+        return;
       }
 
       setIsAnalyzing(true);
@@ -473,6 +491,7 @@ function App({ user }: AppProps) {
     setActivePromptId(session.id);
     setActiveCreatedAt(session.createdAt);
     setStage(session.stage);
+    setError("");
     setSidebarOpen(false);
   }
 
@@ -794,17 +813,33 @@ function App({ user }: AppProps) {
                   <div className="result-heading">
                     <div>
                       <div className="eyebrow"><span>03</span> Execution-ready specification</div>
-                      <h1>Your prompt<br />now holds water.</h1>
+                      <h1>
+                        {totalScore >= QUALITY_GATE ? (
+                          <>
+                            Your prompt
+                            <br />
+                            now holds water.
+                          </>
+                        ) : (
+                          <>
+                            Best available
+                            <br />
+                            prompt is ready.
+                          </>
+                        )}
+                      </h1>
                     </div>
                     <div className={`score-stamp ${totalScore >= QUALITY_GATE ? "score-stamp--pass" : ""}`}>
                       <span>{totalScore}</span>
                       <small>
                         gate {QUALITY_GATE}+
                         <br />
-                        cleared
+                        {totalScore >= QUALITY_GATE ? "cleared" : "not met"}
                       </small>
                     </div>
                   </div>
+
+                  {error && <p className="error-message">{error}</p>}
 
                   <div className="result-toolbar">
                     <span>
