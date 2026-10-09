@@ -188,6 +188,15 @@ provider/network/invalid output, 503 unavailable configuration/profile/limiter c
 and 504 provider timeout. Throttling responses include `Retry-After`. Research responses
 are `no-store`; provider response bodies and secrets are not logged.
 
+An application-first deployment with the old session schema returns **503
+`SCHEMA_MIGRATION_REQUIRED`**. Before profile/session operations, the server checks
+schema metadata for both required progress columns. While either is absent, account
+loading/onboarding, history, saves, deletes, and research pause with a database-update
+message. Research never calls OpenAI in this state and releases its allowance
+reservation. Existing rows remain unchanged; no runtime DDL or legacy write fallback
+silently discards progress. The check is not cached, so retrying after the migration
+resumes service without a process restart. Authentication still runs first.
+
 ## Reliability and spending boundaries
 
 Allowance is **reserved synchronously before** the provider call, so concurrent calls
@@ -222,6 +231,9 @@ the generated prompt only—Promptwell itself does not run those tools.
 2. Apply `db/schema.sql` with `ON_ERROR_STOP=1` in a transaction, as shown above, **before**
    running the updated app. `CREATE … IF NOT EXISTS` and additive column migrations
    make repeated application safe.
+   If code deploys first, the app deliberately stays unavailable with the explicit
+   database-update message until these columns exist. This is a safe stop, not a
+   zero-downtime migration or proof that the production schema has been updated.
 3. The migration adds `quality_round`, `question_index`, and a workspace/history index.
    Existing rows default to round **4**, because historical round usage was not stored.
    This preserves their prompts without granting extra research calls. Old cursor
@@ -251,8 +263,11 @@ export TEST_DATABASE_URL='postgres://USER:PASSWORD@localhost:5432/promptwell_tes
 npm run test:db            # real PostgreSQL migration / ownership / progress tests
 ```
 
-`test:db` requires a **disposable** database. It creates/migrates the schema and cleans
-its generated users afterward. It fails clearly when the connection variable is absent.
+`test:db` requires a **fresh disposable** database with no `promptwell` tables. It
+checks old/partial-schema safe stops, recovery after migration, ownership, and progress,
+then cleans its generated users. It refuses an existing schema instead of dropping
+tables; create a new disposable database for another run. It fails clearly when the
+connection variable is absent.
 `test:smoke` requires a completed build, uses fake test credentials, binds port 4178 on
 loopback, checks all six anonymous API operations, and stops its server afterward.
 The browser harness binds port 4177 and never serves a production authentication bypass.
@@ -280,6 +295,9 @@ environment's credentials; mocked tests cannot prove those integrations are conf
   Retry sync or export before leaving; unload warnings are browser-dependent.
 - A missing database/schema gives a profile/history availability error. Confirm the
   connection and migration before troubleshooting OpenAI.
+- `SCHEMA_MIGRATION_REQUIRED` means the operator must apply `db/schema.sql` to the
+  configured database after the usual backup and approval. The app will not run the
+  migration, spend OpenAI allowance, or write incomplete session records on your behalf.
 - A research 503 can mean invalid configuration. Check the table above without printing
   secret values. A 502 can mean upstream failure, refusal, truncation, or invalid output;
   try again or use the best available prompt. A 504 preserves already submitted answers.

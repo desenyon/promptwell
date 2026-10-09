@@ -1,4 +1,5 @@
 import postgres, { type Sql } from "postgres";
+import { HttpError } from "./http.ts";
 
 import type {
   Answer,
@@ -79,6 +80,22 @@ function database(): Sql {
   return globalForDatabase.promptwellDatabase;
 }
 
+/** Fail closed during an application-first deploy; never mutate the schema at runtime. */
+async function requireSessionSchema(sql: Sql): Promise<void> {
+  const [schema] = await sql<{ ready: boolean }[]>`
+    SELECT count(*) = 2 AS ready
+    FROM information_schema.columns
+    WHERE table_schema = 'promptwell' AND table_name = 'sessions'
+      AND column_name IN ('quality_round', 'question_index')
+      AND data_type = 'integer' AND is_nullable = 'NO'
+  `;
+  // Do not cache this result: the next request must recover after migration.
+  if (!schema.ready) {
+    throw new HttpError(503, "SCHEMA_MIGRATION_REQUIRED",
+      "Promptwell is temporarily unavailable while a database update is pending. Your saved prompts are unchanged. Try again after the update.");
+  }
+}
+
 function defaultWorkspaceId(userId: string): string {
   return `${userId}:default`;
 }
@@ -114,6 +131,7 @@ export async function getOrCreateProfile(
   email: string,
 ): Promise<UserProfile> {
   const sql = database();
+  await requireSessionSchema(sql);
   const workspaceId = defaultWorkspaceId(userId);
 
   await sql.begin(async (transaction) => {
@@ -158,6 +176,7 @@ export async function saveProfile(
   profile: UserProfile,
 ): Promise<UserProfile> {
   const sql = database();
+  await requireSessionSchema(sql);
   const workspaceId = profile.workspace.id || defaultWorkspaceId(userId);
 
   await sql.begin(async (transaction) => {
@@ -236,6 +255,7 @@ export async function listSessions(
   limit = 100,
 ): Promise<SavedPrompt[]> {
   const sql = database();
+  await requireSessionSchema(sql);
   const rows = await sql<SessionRow[]>`
     SELECT
       id,
@@ -265,6 +285,7 @@ export async function upsertSession(
   session: SavedPrompt,
 ): Promise<SavedPrompt> {
   const sql = database();
+  await requireSessionSchema(sql);
   const [row] = await sql<SessionRow[]>`
     INSERT INTO promptwell.sessions (
       id,
@@ -337,6 +358,7 @@ export async function upsertSession(
 
 export async function deleteSession(userId: string, sessionId: string): Promise<boolean> {
   const sql = database();
+  await requireSessionSchema(sql);
   const rows = await sql`
     DELETE FROM promptwell.sessions
     WHERE id = ${sessionId} AND user_id = ${userId}

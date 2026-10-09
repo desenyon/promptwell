@@ -20,6 +20,7 @@ export async function GET(request: Request) {
       sessions: await listSessions(user.id, workspaceId),
     });
   } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error);
     console.error("[Sessions] Load failed", error);
     return NextResponse.json({ error: "History could not be loaded." }, { status: 503 });
   }
@@ -41,6 +42,7 @@ export async function PUT(request: Request) {
   try {
     return NextResponse.json({ session: await upsertSession(user.id, session) });
   } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error);
     console.error("[Sessions] Save failed", error);
     return NextResponse.json({ error: "Prompt session could not be saved." }, { status: 503 });
   }
@@ -61,6 +63,7 @@ export async function DELETE(request: Request) {
       ? new NextResponse(null, { status: 204 })
       : NextResponse.json({ error: "Prompt session was not found." }, { status: 404 });
   } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error);
     console.error("[Sessions] Delete failed", error);
     return NextResponse.json({ error: "Prompt session could not be deleted." }, { status: 503 });
   }

@@ -51,8 +51,9 @@ export async function handleResearch(request: Request, user: { id: string; email
   }
   let profile: UserProfile;
   try { profile = await deps.loadProfile(user.id, user.email); }
-  catch {
+  catch (error) {
     reservation.release();
+    if (error instanceof HttpError) return errorResponse(error);
     deps.log("profile_unavailable");
     return errorResponse(new HttpError(503, "PROFILE_UNAVAILABLE", "Your saved prompting profile could not be loaded."));
   }
