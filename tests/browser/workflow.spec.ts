@@ -22,6 +22,25 @@ async function openHistory(page: Page) {
   await page.locator(".history-open").first().click();
 }
 
+test("a pending database update pauses the app and retry recovers", async ({ page }) => {
+  await account(page, [session]);
+  let pending = true;
+  let calls = 0;
+  await page.route("**/api/profile", (route) => route.fulfill(pending
+    ? { status: 503, json: { code: "SCHEMA_MIGRATION_REQUIRED", error: "Promptwell is temporarily unavailable while a database update is pending. Your saved prompts are unchanged. Try again after the update." } }
+    : { json: { profile } }));
+  await page.route("**/api/refine", (route) => { calls++; return route.fulfill({ json: result }); });
+  await page.goto("/");
+  await expect(page.getByText(/database update is pending/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Research prompt" })).toHaveCount(0);
+  expect(calls).toBe(0);
+  pending = false;
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByLabel("Your rough prompt")).toBeVisible();
+  await openHistory(page);
+  await expect(page.getByRole("heading", { name: session.questions[0].prompt })).toBeVisible();
+});
+
 test("skipped question cursor and research round survive a reload", async ({ page }) => {
   const saved = { ...session, qualityRound: 3, questionIndex: 0, questions: [...result.questions, { ...result.questions[0], id: "second", prompt: "Second decision?" }] };
   const state = await account(page, [saved]);

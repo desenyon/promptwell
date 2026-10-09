@@ -103,6 +103,7 @@ export async function GET() {
   try {
     return NextResponse.json({ profile: await getOrCreateProfile(user.id, user.email) });
   } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error);
     console.error("[Profile] Load failed", error);
     return NextResponse.json({ error: "Your profile could not be loaded." }, { status: 503 });
   }
@@ -131,6 +132,7 @@ export async function PUT(request: Request) {
   try {
     return NextResponse.json({ profile: await saveProfile(user.id, user.email, profile) });
   } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error);
     console.error("[Profile] Save failed", error);
     return NextResponse.json({ error: "Your profile could not be saved." }, { status: 503 });
   }

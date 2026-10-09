@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { handleResearch } from "./service.ts";
 import { readEngineConfig } from "./config.ts";
 import { ResearchLimits } from "./limits.ts";
+import { HttpError } from "../http.ts";
 import { profile, result } from "./fixtures.test-support.ts";
 
 const config = readEngineConfig({ OPENAI_API_KEY: "test-key" });
@@ -23,6 +24,20 @@ test("profile and configuration failures return actionable non-secret responses"
   assert.equal((await handleResearch(request(), user, { ...deps, config: () => { throw new Error("secret"); } })).status, 503);
   assert.equal((await handleResearch(request(), user, { ...deps, loadProfile: async () => { throw new Error("secret"); } })).status, 503);
   assert.equal((await handleResearch(request(), user, { ...deps, loadProfile: async () => ({ ...profile, onboardingCompleted: false }) })).status, 409);
+});
+test("a pending database migration never calls the provider and releases its reservation", async () => {
+  let calls = 0;
+  const deps = dependencies(async () => { calls++; return success(); });
+  deps.config = () => ({ ...config, monthlyRequestCap: 1 });
+  deps.loadProfile = async () => { throw new HttpError(503, "SCHEMA_MIGRATION_REQUIRED", "Database update pending."); };
+  const response = await handleResearch(request(), user, deps);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal((await response.json()).code, "SCHEMA_MIGRATION_REQUIRED");
+  assert.equal(calls, 0);
+  deps.loadProfile = async () => profile;
+  assert.equal((await handleResearch(request(), user, deps)).status, 200);
+  assert.equal(calls, 1);
 });
 test("successful research is validated and receives no-store headers", async () => {
   const response = await handleResearch(request(), user, dependencies());
