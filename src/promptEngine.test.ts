@@ -161,3 +161,41 @@ describe("quality gate helpers", () => {
     assert.match(compiled, /Ship a Next\.js account settings page/);
   });
 });
+
+describe("honest compiled output", () => {
+  it("keeps source URLs alongside their extracted practices", () => {
+    const result = compilePrompt("Build settings.", [], [], profile, baseBrief, [
+      { title: "Next docs", url: "https://nextjs.org/docs", practice: "Use forms." },
+    ]);
+    assert.match(result, /https:\/\/nextjs.org\/docs/);
+    assert.match(result, /Use forms\./);
+  });
+
+  it("omits the tool plan when the saved preference disables it", () => {
+    const result = compilePrompt("Build settings.", [], [], {
+      ...profile, preferences: { ...profile.preferences, includeToolPlan: false },
+    }, baseBrief, []);
+    assert.doesNotMatch(result, /# TOOL PLAN/);
+    assert.doesNotMatch(result, /Graphify: query/);
+    assert.match(result, /# VERIFICATION CONTRACT/);
+  });
+
+  it("does not award score lift for blank or repeated answers", () => {
+    const prompt = "Build an account settings page for our app.";
+    const expected = scoreSpecification(prompt, [concreteAnswers[0]], baseQuestions, baseBrief);
+    const polluted = scoreSpecification(prompt, [
+      concreteAnswers[0], concreteAnswers[0], { questionId: "empty", value: "   " },
+    ], baseQuestions, baseBrief);
+    assert.deepEqual(polluted, expected);
+  });
+});
+
+describe("guidance provenance", () => {
+  it("does not label unbrowsed guidance as researched practices", () => {
+    const compiled = compilePrompt("Build settings.", [], [], {
+      ...profile, preferences: { ...profile.preferences, researchByDefault: false },
+    }, baseBrief, []);
+    assert.doesNotMatch(compiled, /# RESEARCHED PRACTICES/);
+    assert.match(compiled, /not externally verified/i);
+  });
+});

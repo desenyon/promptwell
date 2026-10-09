@@ -92,7 +92,12 @@ export default function SettingsPage({
 
   async function deletePrompt(session: SavedPrompt) {
     if (!window.confirm(`Delete “${session.title}” from synced history?`)) return;
-    await onDeletePrompt(session.id);
+    try {
+      await onDeletePrompt(session.id);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Prompt could not be deleted.");
+    }
   }
 
   return (
@@ -310,11 +315,12 @@ export default function SettingsPage({
         </div>
       ) : (
         <section className="history-page">
+          {message && <p className="error-message" role="alert">{message}</p>}
           <div className="history-toolbar">
             <div>
               <h2>Prompt history</h2>
               <p>
-                Full research archive for {profile.workspace.name}. Open any entry to resume answers
+                Up to 100 most recently updated prompts for {profile.workspace.name}. Open any entry to resume answers
                 or copy the compiled prompt.
               </p>
             </div>

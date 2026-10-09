@@ -43,3 +43,14 @@ CREATE INDEX IF NOT EXISTS promptwell_sessions_user_updated_idx
 
 CREATE INDEX IF NOT EXISTS promptwell_workspaces_user_idx
   ON promptwell.workspaces (user_id, updated_at DESC);
+
+-- Additive, idempotent migration for existing installations. Unknown historical
+-- round counts receive no extra paid research budget when opened again.
+ALTER TABLE promptwell.sessions
+  ADD COLUMN IF NOT EXISTS quality_round integer NOT NULL DEFAULT 4
+    CHECK (quality_round BETWEEN 1 AND 4),
+  ADD COLUMN IF NOT EXISTS question_index integer NOT NULL DEFAULT 0
+    CHECK (question_index BETWEEN 0 AND 31);
+
+CREATE INDEX IF NOT EXISTS promptwell_sessions_workspace_updated_idx
+  ON promptwell.sessions (user_id, workspace_id, updated_at DESC);

@@ -2,39 +2,8 @@ import { withAuth } from "@workos-inc/authkit-nextjs";
 import { NextResponse } from "next/server";
 
 import { deleteSession, listSessions, upsertSession } from "@/lib/db";
-import type { SavedPrompt } from "@/types";
-
-function parseSession(value: unknown, userId: string): SavedPrompt | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<SavedPrompt>;
-  const validStage = candidate.stage === "questions" || candidate.stage === "result";
-
-  if (
-    typeof candidate.id !== "string" ||
-    candidate.id.length > 100 ||
-    candidate.workspaceId !== `${userId}:default` ||
-    typeof candidate.title !== "string" ||
-    candidate.title.length > 160 ||
-    typeof candidate.prompt !== "string" ||
-    candidate.prompt.length > 12_000 ||
-    !Array.isArray(candidate.questions) ||
-    !Array.isArray(candidate.answers) ||
-    !Array.isArray(candidate.sources) ||
-    !candidate.researchBrief ||
-    typeof candidate.researchBrief !== "object" ||
-    typeof candidate.compiledPrompt !== "string" ||
-    candidate.compiledPrompt.length > 100_000 ||
-    !validStage ||
-    typeof candidate.createdAt !== "string" ||
-    Number.isNaN(Date.parse(candidate.createdAt)) ||
-    typeof candidate.updatedAt !== "string" ||
-    Number.isNaN(Date.parse(candidate.updatedAt))
-  ) {
-    return null;
-  }
-
-  return candidate as SavedPrompt;
-}
+import { parseSession, readJsonBody } from "@/lib/validation";
+import { HttpError, errorResponse } from "@/lib/http";
 
 export async function GET(request: Request) {
   const { user } = await withAuth();
@@ -60,20 +29,13 @@ export async function PUT(request: Request) {
   const { user } = await withAuth();
   if (!user) return NextResponse.json({ error: "Sign in is required." }, { status: 401 });
 
-  let body: unknown;
+  let session;
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
-  }
-
-  const value =
-    body && typeof body === "object" && "session" in body
-      ? (body as { session: unknown }).session
-      : null;
-  const session = parseSession(value, user.id);
-  if (!session) {
-    return NextResponse.json({ error: "Prompt session is invalid." }, { status: 400 });
+    const body = await readJsonBody(request, 2_000_000);
+    const value = body && typeof body === "object" && "session" in body ? body.session : null;
+    session = parseSession(value, user.id);
+  } catch (error) {
+    return errorResponse(error instanceof HttpError ? error : new HttpError(400, "INVALID_INPUT", "Prompt session is invalid."));
   }
 
   try {

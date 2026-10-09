@@ -96,6 +96,9 @@ export interface SavedPrompt {
   researchBrief: ResearchBrief;
   compiledPrompt: string;
   stage: Exclude<AppStage, "draft">;
+  /** Optional only for compatibility with sessions created before the progress migration. */
+  qualityRound?: number;
+  questionIndex?: number;
   createdAt: string;
   updatedAt: string;
 }
