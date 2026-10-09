@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
   ChevronRight,
   Copy,
+  Download,
   History,
   LogOut,
   Menu,
@@ -30,6 +31,8 @@ import {
   scoreSpecification,
   weakDimensions,
 } from "./promptEngine";
+import { getSessionProgress, SessionWriter, mergeResearch } from "./sessionState";
+import { MAX_ANSWER_CHARACTERS, MAX_PROMPT_CHARACTERS } from "./lib/validation";
 import { generateFollowUpQuestions, generateQuestions } from "./provider";
 import type {
   Answer,
@@ -57,7 +60,7 @@ type SyncState = "idle" | "saving" | "saved" | "error";
 
 function titleFromPrompt(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
-  const title = normalized.split(" ").slice(0, 7).join(" ");
+  const title = normalized.split(" ").slice(0, 7).join(" ").slice(0, 159);
   if (!title) return "Untitled prompt";
   return title.length < normalized.length ? `${title}…` : title;
 }
@@ -93,6 +96,21 @@ function App({ user }: AppProps) {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>("idle");
+  const [writer] = useState(() => new SessionWriter(saveSession));
+  const unsynced = useRef(new Map<string, SavedPrompt>());
+  const pendingWrites = useRef(0);
+  const researchRequest = useRef<AbortController | null>(null);
+  const activePromptRef = useRef<string | null>(null);
+
+  useEffect(() => () => researchRequest.current?.abort(), []);
+  useEffect(() => {
+    const warnBeforeExit = (event: BeforeUnloadEvent) => {
+      if (unsynced.current.size) { event.preventDefault(); event.returnValue = ""; }
+    };
+    window.addEventListener("beforeunload", warnBeforeExit);
+    return () => window.removeEventListener("beforeunload", warnBeforeExit);
+  }, []);
+
 
   const score = useMemo(
     () => scoreSpecification(prompt, answers, questions, researchBrief),
@@ -115,6 +133,10 @@ function App({ user }: AppProps) {
     [answers, profile, prompt, questions, researchBrief, researchSources],
   );
   const activeQuestion = questions[questionIndex];
+  useEffect(() => {
+    setDraftAnswer(answers.find((answer) => answer.questionId === activeQuestion?.id)?.value ?? "");
+  }, [activePromptId, activeQuestion?.id, answers]);
+
   const documentTitle = titleFromPrompt(prompt);
 
   async function bootstrap() {
@@ -147,47 +169,45 @@ function App({ user }: AppProps) {
     );
   }
 
+  function updateSyncState() {
+    setSyncState(pendingWrites.current > 0 ? "saving" : unsynced.current.size > 0 ? "error" : "saved");
+  }
+
   function persistSession(session: SavedPrompt) {
     optimisticSession(session);
+    unsynced.current.set(session.id, session);
+    pendingWrites.current += 1;
     setSyncState("saving");
-    void saveSession(session)
-      .then((saved) => {
+    void writer.save(session).then((saved) => {
+      // A previous response must never replace newer optimistic progress.
+      if (unsynced.current.get(session.id) === session) {
+        unsynced.current.delete(session.id);
         optimisticSession(saved);
-        setSyncState("saved");
-      })
-      .catch((saveError) => {
-        console.error("[Prompt session] Save failed", saveError);
-        setSyncState("error");
-      });
+      }
+    }).catch(() => {
+      // Keep the latest snapshot for the explicit retry action.
+    }).finally(() => {
+      pendingWrites.current -= 1;
+      updateSyncState();
+    });
+  }
+
+  function retrySync() {
+    for (const session of unsynced.current.values()) persistSession(session);
   }
 
   function createSession(
     nextAnswers: Answer[],
     nextStage: Exclude<AppStage, "draft">,
+    nextIndex = questionIndex,
   ): SavedPrompt | null {
-    if (!profile || !activePromptId) return null;
-    const now = new Date().toISOString();
-    return {
-      id: activePromptId,
-      workspaceId: profile.workspace.id,
-      title: titleFromPrompt(prompt),
-      prompt: prompt.trim(),
-      questions,
-      answers: nextAnswers,
-      sources: researchSources,
-      researchBrief,
-      compiledPrompt: compilePrompt(
-        prompt,
-        questions,
-        nextAnswers,
-        profile,
-        researchBrief,
-        researchSources,
-      ),
-      stage: nextStage,
-      createdAt: activeCreatedAt ?? now,
-      updatedAt: now,
-    };
+    return createSessionWith(nextAnswers, questions, researchBrief, researchSources, nextStage, qualityRound, nextIndex);
+  }
+
+  function stopResearch() {
+    researchRequest.current?.abort();
+    researchRequest.current = null;
+    setIsAnalyzing(false);
   }
 
   async function completeOnboarding(nextProfile: UserProfile) {
@@ -202,22 +222,29 @@ function App({ user }: AppProps) {
   }
 
   async function deletePrompt(sessionId: string) {
+    await writer.drain(sessionId);
     await removeSession(sessionId);
+    unsynced.current.delete(sessionId);
+    updateSyncState();
     setSavedPrompts((current) => current.filter((session) => session.id !== sessionId));
-    if (activePromptId === sessionId) resetWorkspace();
+    if (activePromptRef.current === sessionId) resetWorkspace();
   }
 
   async function analyzePrompt() {
-    if (prompt.trim().length < 12) {
-      setError("Give us at least one complete sentence to work with.");
+    if (isAnalyzing) return;
+    if (prompt.trim().length < 12 || prompt.length > MAX_PROMPT_CHARACTERS) {
+      setError("Use a complete sentence between 12 and 12,000 characters.");
       return;
     }
     if (!profile) return;
 
     setError("");
     setIsAnalyzing(true);
+    const controller = new AbortController();
+    researchRequest.current = controller;
     try {
-      const result = await generateQuestions(prompt);
+      const result = await generateQuestions(prompt, controller.signal);
+      if (researchRequest.current !== controller) return;
       const sessionId = activePromptId ?? window.crypto.randomUUID();
       const createdAt = activeCreatedAt ?? new Date().toISOString();
       setQuestions(result.questions);
@@ -226,6 +253,7 @@ function App({ user }: AppProps) {
       setAnswers([]);
       setQuestionIndex(0);
       setQualityRound(1);
+      activePromptRef.current = sessionId;
       setActivePromptId(sessionId);
       setActiveCreatedAt(createdAt);
       setStage("questions");
@@ -248,14 +276,17 @@ function App({ user }: AppProps) {
           result.sources,
         ),
         stage: "questions",
+        qualityRound: 1,
+        questionIndex: 0,
         createdAt,
         updatedAt: createdAt,
       };
       persistSession(session);
     } catch (requestError) {
+      if (researchRequest.current !== controller) return;
       setError(requestError instanceof Error ? requestError.message : "Question generation failed.");
     } finally {
-      setIsAnalyzing(false);
+      if (researchRequest.current === controller) { researchRequest.current = null; setIsAnalyzing(false); }
     }
   }
 
@@ -265,139 +296,48 @@ function App({ user }: AppProps) {
     currentBrief: ResearchBrief,
     currentSources: ResearchSource[],
   ) {
-    const workingAnswers = nextAnswers;
-    let workingQuestions = currentQuestions;
-    let workingBrief = currentBrief;
-    let workingSources = currentSources;
-    let round = qualityRound;
+    if (isAnalyzing) return;
+    const nextScore = scoreSpecification(prompt, nextAnswers, currentQuestions, currentBrief);
+    const nextTotal = overallScore(nextScore);
+    const lastIndex = Math.max(currentQuestions.length - 1, 0);
+    if (nextTotal >= QUALITY_GATE || qualityRound >= MAX_QUALITY_ROUNDS) {
+      setAnswers(nextAnswers);
+      setStage("result");
+      setError(nextTotal < QUALITY_GATE ? `Quality is ${nextTotal}/100 after ${qualityRound} rounds. Review the best available prompt before using it.` : "");
+      const session = createSessionWith(nextAnswers, currentQuestions, currentBrief, currentSources, "result", qualityRound, lastIndex);
+      if (session) persistSession(session);
+      return;
+    }
 
-    while (true) {
-      const nextScore = scoreSpecification(prompt, workingAnswers, workingQuestions, workingBrief);
-      const nextTotal = overallScore(nextScore);
-
-      if (nextTotal >= QUALITY_GATE) {
-        setAnswers(workingAnswers);
-        setQuestions(workingQuestions);
-        setResearchBrief(workingBrief);
-        setResearchSources(workingSources);
-        setQualityRound(round);
-        setError("");
-        const session = createSessionWith(
-          workingAnswers,
-          workingQuestions,
-          workingBrief,
-          workingSources,
-          "result",
-        );
-        if (session) persistSession(session);
-        setStage("result");
-        return;
-      }
-
-      // Hard stop after the configured round budget. Continuing to call the
-      // research API would burn the monthly allowance without a guaranteed score lift.
-      if (round >= MAX_QUALITY_ROUNDS) {
-        setAnswers(workingAnswers);
-        setQuestions(workingQuestions);
-        setResearchBrief(workingBrief);
-        setResearchSources(workingSources);
-        setQualityRound(round);
-        setError(
-          `Quality is ${nextTotal}/100 after ${MAX_QUALITY_ROUNDS} research rounds (gate ${QUALITY_GATE}). The best available prompt is ready — review the score panel and refine manually if needed.`,
-        );
-        const session = createSessionWith(
-          workingAnswers,
-          workingQuestions,
-          workingBrief,
-          workingSources,
-          "result",
-        );
-        if (session) persistSession(session);
-        setStage("result");
-        return;
-      }
-
-      setIsAnalyzing(true);
-      setError("");
-      try {
-        const followUp = await generateFollowUpQuestions(prompt, {
-          answers: workingAnswers,
-          questions: workingQuestions,
-          score: nextScore,
-          overall: nextTotal,
-          weakDimensions: weakDimensions(nextScore),
-          researchBrief: workingBrief,
-          round: round + 1,
-        });
-
-        const existingIds = new Set(workingQuestions.map((question) => question.id));
-        const freshQuestions = followUp.questions.filter((question) => !existingIds.has(question.id));
-        if (freshQuestions.length === 0) {
-          throw new Error("Quality iteration returned no new questions.");
-        }
-
-        workingQuestions = [...workingQuestions, ...freshQuestions];
-        workingBrief = {
-          domain: followUp.researchBrief.domain || workingBrief.domain,
-          taskType: followUp.researchBrief.taskType || workingBrief.taskType,
-          practices: [
-            ...workingBrief.practices,
-            ...followUp.researchBrief.practices.filter(
-              (practice) =>
-                !workingBrief.practices.some((existing) => existing.title === practice.title),
-            ),
-          ].slice(0, 6),
-          toolPlan: [
-            ...new Set([...workingBrief.toolPlan, ...followUp.researchBrief.toolPlan]),
-          ].slice(0, 8),
-          verificationPlan: [
-            ...new Set([
-              ...workingBrief.verificationPlan,
-              ...followUp.researchBrief.verificationPlan,
-            ]),
-          ].slice(0, 8),
-        };
-        workingSources = [
-          ...workingSources,
-          ...followUp.sources.filter(
-            (source) => !workingSources.some((existing) => existing.url === source.url),
-          ),
-        ].slice(0, 8);
-        round += 1;
-
-        setAnswers(workingAnswers);
-        setQuestions(workingQuestions);
-        setResearchBrief(workingBrief);
-        setResearchSources(workingSources);
-        setQualityRound(round);
-        setQuestionIndex(workingQuestions.length - freshQuestions.length);
-        setStage("questions");
-
-        const session = createSessionWith(
-          workingAnswers,
-          workingQuestions,
-          workingBrief,
-          workingSources,
-          "questions",
-        );
-        if (session) persistSession(session);
-        return;
-      } catch (requestError) {
-        setAnswers(workingAnswers);
-        setQuestions(workingQuestions);
-        setResearchBrief(workingBrief);
-        setResearchSources(workingSources);
-        setError(
-          requestError instanceof Error
-            ? requestError.message
-            : "Quality iteration failed. Try answering again.",
-        );
-        setStage("questions");
-        setQuestionIndex(Math.max(workingQuestions.length - 1, 0));
-        return;
-      } finally {
-        setIsAnalyzing(false);
-      }
+    // Save answers before any network request, including a failed/cancelled follow-up.
+    const progress = createSessionWith(nextAnswers, currentQuestions, currentBrief, currentSources, "questions", qualityRound, lastIndex);
+    if (progress) persistSession(progress);
+    setAnswers(nextAnswers);
+    setQuestionIndex(lastIndex);
+    setIsAnalyzing(true);
+    setError("");
+    const controller = new AbortController();
+    researchRequest.current = controller;
+    try {
+      const followUp = await generateFollowUpQuestions(prompt, {
+        answers: nextAnswers, questions: currentQuestions, score: nextScore, overall: nextTotal,
+        weakDimensions: weakDimensions(nextScore), researchBrief: currentBrief, round: qualityRound + 1,
+      }, controller.signal);
+      if (researchRequest.current !== controller) return;
+      const merged = mergeResearch({ questions: currentQuestions, researchBrief: currentBrief, sources: currentSources }, followUp);
+      setQuestions(merged.questions);
+      setResearchBrief(merged.researchBrief);
+      setResearchSources(merged.sources);
+      setQualityRound(qualityRound + 1);
+      setQuestionIndex(currentQuestions.length);
+      setStage("questions");
+      const session = createSessionWith(nextAnswers, merged.questions, merged.researchBrief, merged.sources, "questions", qualityRound + 1, currentQuestions.length);
+      if (session) persistSession(session);
+    } catch (requestError) {
+      if (researchRequest.current !== controller) return;
+      setError(requestError instanceof Error ? requestError.message : "Quality iteration failed. Try again or use the current prompt.");
+    } finally {
+      if (researchRequest.current === controller) { researchRequest.current = null; setIsAnalyzing(false); }
     }
   }
 
@@ -407,6 +347,8 @@ function App({ user }: AppProps) {
     nextBrief: ResearchBrief,
     nextSources: ResearchSource[],
     nextStage: Exclude<AppStage, "draft">,
+    nextRound: number,
+    nextIndex: number,
   ): SavedPrompt | null {
     if (!profile || !activePromptId) return null;
     const now = new Date().toISOString();
@@ -428,13 +370,15 @@ function App({ user }: AppProps) {
         nextSources,
       ),
       stage: nextStage,
+      qualityRound: nextRound,
+      questionIndex: nextIndex,
       createdAt: activeCreatedAt ?? now,
       updatedAt: now,
     };
   }
 
   function submitAnswer(value = draftAnswer) {
-    if (!activeQuestion || !value.trim()) return;
+    if (isAnalyzing || !activeQuestion || !value.trim() || value.length > MAX_ANSWER_CHARACTERS) return;
     const nextAnswers = [
       ...answers.filter((answer) => answer.questionId !== activeQuestion.id),
       { questionId: activeQuestion.id, value: value.trim() },
@@ -443,7 +387,7 @@ function App({ user }: AppProps) {
     setDraftAnswer("");
 
     if (questionIndex < questions.length - 1) {
-      const session = createSession(nextAnswers, "questions");
+      const session = createSession(nextAnswers, "questions", questionIndex + 1);
       if (session) persistSession(session);
       setQuestionIndex((current) => current + 1);
       return;
@@ -453,8 +397,9 @@ function App({ user }: AppProps) {
   }
 
   function skipQuestion() {
+    if (isAnalyzing) return;
     if (questionIndex < questions.length - 1) {
-      const session = createSession(answers, "questions");
+      const session = createSession(answers, "questions", questionIndex + 1);
       if (session) persistSession(session);
       setQuestionIndex((current) => current + 1);
       return;
@@ -464,6 +409,8 @@ function App({ user }: AppProps) {
   }
 
   function resetWorkspace() {
+    stopResearch();
+    setCopied(false);
     setView("workspace");
     setPrompt("");
     setQuestions([]);
@@ -476,18 +423,24 @@ function App({ user }: AppProps) {
     setError("");
     setStage("draft");
     setSidebarOpen(false);
+    activePromptRef.current = null;
     setActivePromptId(null);
     setActiveCreatedAt(null);
   }
 
   function openSavedPrompt(session: SavedPrompt) {
+    stopResearch();
+    setCopied(false);
+    const progress = getSessionProgress(session);
+    setQualityRound(progress.qualityRound);
     setView("workspace");
     setPrompt(session.prompt);
     setQuestions(session.questions);
     setAnswers(session.answers);
     setResearchSources(session.sources);
     setResearchBrief(session.researchBrief ?? EMPTY_RESEARCH_BRIEF);
-    setQuestionIndex(Math.min(session.answers.length, Math.max(session.questions.length - 1, 0)));
+    setQuestionIndex(progress.questionIndex);
+    activePromptRef.current = session.id;
     setActivePromptId(session.id);
     setActiveCreatedAt(session.createdAt);
     setStage(session.stage);
@@ -496,14 +449,36 @@ function App({ user }: AppProps) {
   }
 
   function openSettings(target: "settings" | "history") {
+    stopResearch();
     setView(target);
     setSidebarOpen(false);
   }
 
   async function copyResult() {
-    await navigator.clipboard.writeText(compiledPrompt);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_800);
+    try {
+      await navigator.clipboard.writeText(compiledPrompt);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_800);
+    } catch { setError("Clipboard access failed. Select the prompt or download the Markdown file."); }
+  }
+
+  function downloadResult() {
+    const url = URL.createObjectURL(new Blob([compiledPrompt], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "promptwell-prompt.md";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function finishNow() {
+    const nextAnswers = activeQuestion && draftAnswer.trim()
+      ? [...answers.filter((a) => a.questionId !== activeQuestion.id), { questionId: activeQuestion.id, value: draftAnswer.trim() }]
+      : answers;
+    setAnswers(nextAnswers);
+    setStage("result");
+    const session = createSession(nextAnswers, "result");
+    if (session) persistSession(session);
   }
 
   if (isBootstrapping) {
@@ -633,6 +608,7 @@ function App({ user }: AppProps) {
             <span className={`autosave ${syncState === "error" ? "autosave--error" : ""}`}>
               {syncLabel}
             </span>
+            {syncState === "error" && <button className="text-button" onClick={retrySync}>Retry sync</button>}
             {view === "workspace" && (
               <button className="quality-toggle" onClick={() => setQualityOpen((open) => !open)}>
                 Score {totalScore}
@@ -655,7 +631,10 @@ function App({ user }: AppProps) {
           ) : (
             <>
               {isAnalyzing && (stage === "draft" || stage === "questions") && (
-                <ResearchingScene />
+                <div>
+                  <button className="secondary-button" onClick={() => { stopResearch(); setError("Research cancelled. Saved answers are preserved."); }}>Cancel research</button>
+                  <ResearchingScene researchEnabled={profile.preferences.researchByDefault} />
+                </div>
               )}
 
               {stage === "draft" && !isAnalyzing && (
@@ -669,6 +648,7 @@ function App({ user }: AppProps) {
 
                     <div className="prompt-composer">
                       <textarea
+                        maxLength={MAX_PROMPT_CHARACTERS}
                         value={prompt}
                         onChange={(event) => {
                           setPrompt(event.target.value);
@@ -777,6 +757,8 @@ function App({ user }: AppProps) {
                       ) : (
                         <div className="answer-field">
                           <textarea
+                            aria-label={activeQuestion.prompt}
+                            maxLength={MAX_ANSWER_CHARACTERS}
                             value={draftAnswer}
                             onChange={(event) => setDraftAnswer(event.target.value)}
                             placeholder={activeQuestion.placeholder ?? "Add the concrete details…"}
@@ -805,6 +787,7 @@ function App({ user }: AppProps) {
                   <button className="skip-button" onClick={skipQuestion} type="button">
                     Memory already covers this
                   </button>
+                  <button className="skip-button" onClick={finishNow} type="button">Use current prompt</button>
                 </div>
               )}
 
@@ -843,13 +826,15 @@ function App({ user }: AppProps) {
 
                   <div className="result-toolbar">
                     <span>
-                      {answers.length} decisions · {researchBrief.practices.length} researched practices
+                      {answers.length} decisions · {researchBrief.practices.length} practices
                     </span>
                     <button onClick={copyResult}>
                       {copied ? <Check size={16} /> : <Copy size={16} />}
                       {copied ? "Copied" : "Copy prompt"}
                     </button>
                   </div>
+                  {totalScore < QUALITY_GATE && <p className="error-message">Quality gate not met ({totalScore}/{QUALITY_GATE}). Review unresolved decisions before using this prompt.</p>}
+                  <button className="text-button" onClick={downloadResult}><Download size={16} /> Download Markdown</button>
                   <pre className="compiled-prompt">{compiledPrompt}</pre>
 
                   <section className="strategy-summary">

@@ -6,7 +6,7 @@ async function responseError(response: Response, fallback: string): Promise<Erro
 }
 
 export async function loadProfile(): Promise<UserProfile> {
-  const response = await fetch("/api/profile", { cache: "no-store" });
+  const response = await fetch("/api/profile", { cache: "no-store", signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw await responseError(response, "Profile could not be loaded.");
   const body = (await response.json()) as { profile?: UserProfile };
   if (!body.profile) throw new Error("Profile response was incomplete.");
@@ -16,6 +16,7 @@ export async function loadProfile(): Promise<UserProfile> {
 export async function updateProfile(profile: UserProfile): Promise<UserProfile> {
   const response = await fetch("/api/profile", {
     method: "PUT",
+    signal: AbortSignal.timeout(30_000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ profile }),
   });
@@ -28,7 +29,7 @@ export async function updateProfile(profile: UserProfile): Promise<UserProfile> 
 export async function loadSessions(workspaceId: string): Promise<SavedPrompt[]> {
   const response = await fetch(
     `/api/sessions?workspaceId=${encodeURIComponent(workspaceId)}`,
-    { cache: "no-store" },
+    { cache: "no-store", signal: AbortSignal.timeout(30_000) },
   );
   if (!response.ok) throw await responseError(response, "History could not be loaded.");
   const body = (await response.json()) as { sessions?: SavedPrompt[] };
@@ -38,6 +39,7 @@ export async function loadSessions(workspaceId: string): Promise<SavedPrompt[]> 
 export async function saveSession(session: SavedPrompt): Promise<SavedPrompt> {
   const response = await fetch("/api/sessions", {
     method: "PUT",
+    signal: AbortSignal.timeout(30_000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session }),
   });
@@ -50,6 +52,7 @@ export async function saveSession(session: SavedPrompt): Promise<SavedPrompt> {
 export async function removeSession(sessionId: string): Promise<void> {
   const response = await fetch(`/api/sessions?id=${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok && response.status !== 404) {
     throw await responseError(response, "Prompt could not be deleted.");

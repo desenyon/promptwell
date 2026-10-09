@@ -90,7 +90,7 @@ export function scoreSpecification(
   const trimmed = prompt.trim();
   if (!trimmed) return { ...EMPTY_SCORE };
 
-  const answerList = answers;
+  const answerList = [...new Map(answers.filter((answer) => answer.value.trim()).map((answer) => [answer.questionId, answer])).values()];
   const answeredCount = answerList.length;
   const normalized = trimmed.toLowerCase();
   const words = trimmed.split(/\s+/).filter(Boolean).length;
@@ -230,7 +230,7 @@ export function compilePrompt(
     .map((step) => `- [ ] ${step}`)
     .join("\n");
   const sourceTrail = sources
-    .map((source) => `- ${source.title}: ${source.practice ?? source.url}`)
+    .map((source) => `- ${source.title}: ${source.url}${source.practice ? ` — ${source.practice}` : ""}`)
     .join("\n");
   const customInstructions = profile.preferences.customInstructions.trim();
 
@@ -254,10 +254,10 @@ ${original.trim()}
 # CLARIFIED DECISIONS
 ${context || "- No additional context supplied."}
 
-# RESEARCHED PRACTICES
+# ${sources.length ? "RESEARCHED PRACTICES" : "PRACTICE GUIDANCE (not externally verified)"}
 ${practices || "1. No domain-specific practices were supplied. Verify current primary guidance before acting."}
 
-# TOOL PLAN
+${profile.preferences.includeToolPlan ? `# TOOL PLAN
 Use tools only when they improve evidence or reduce uncertainty. Follow this task-specific sequence:
 ${toolPlan || "1. Inspect the available context before choosing tools."}
 
@@ -271,7 +271,7 @@ Tool routing rules (use only tools listed above as available):
 - Hooks: rely on deterministic enforcement already configured; do not emulate a hook with freeform model judgment.
 - Optimization: establish metric, baseline, target, benchmark method, and regression threshold before changing behavior.
 
-# EXECUTION PROTOCOL
+` : ""}# EXECUTION PROTOCOL
 1. Restate the exact artifact, user-visible outcome, scope, non-goals, and definition of done in a concise working plan.
 2. Inspect the current state before proposing changes. Do not invent repository files, APIs, versions, user data, or tool results.
 3. Gather the minimum sufficient evidence. Prefer targeted retrieval over broad context loading.

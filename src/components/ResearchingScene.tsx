@@ -11,7 +11,7 @@ const PHASES = [
   "Locking verification criteria",
 ] as const;
 
-export default function ResearchingScene() {
+export default function ResearchingScene({ researchEnabled = true }: { researchEnabled?: boolean }) {
   const [phaseIndex, setPhaseIndex] = useState(0);
 
   useEffect(() => {
@@ -24,9 +24,9 @@ export default function ResearchingScene() {
   return (
     <div className="research-scene" aria-live="polite" aria-busy="true">
       <div className="research-scene-copy">
-        <span className="modal-kicker">Research in progress</span>
+        <span className="modal-kicker">{researchEnabled ? "Research in progress" : "Preparing prompt"}</span>
         <h2>Forging the specification</h2>
-        <p>{PHASES[phaseIndex]}</p>
+        <p>{!researchEnabled && phaseIndex === 1 ? "Applying saved context" : PHASES[phaseIndex]}</p>
       </div>
 
       <div className="research-stage" aria-hidden="true">

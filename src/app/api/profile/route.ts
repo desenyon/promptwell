@@ -1,3 +1,5 @@
+import { readJsonBody } from "@/lib/validation";
+import { HttpError, errorResponse } from "@/lib/http";
 import { withAuth } from "@workos-inc/authkit-nextjs";
 import { NextResponse } from "next/server";
 
@@ -112,9 +114,9 @@ export async function PUT(request: Request) {
 
   let body: unknown;
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    body = await readJsonBody(request, 32_000);
+  } catch (error) {
+    return errorResponse(error instanceof HttpError ? error : new HttpError(400, "INVALID_JSON", "Request body must be valid JSON."));
   }
 
   const value =

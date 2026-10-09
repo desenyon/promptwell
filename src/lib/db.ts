@@ -11,7 +11,7 @@ import type {
   SavedPrompt,
   ToolId,
   UserProfile,
-} from "@/types";
+} from "../types.ts";
 
 const DEFAULT_PREFERENCES: PromptPreferences = {
   detailLevel: "thorough",
@@ -51,6 +51,8 @@ interface SessionRow {
   research_brief: ResearchBrief;
   compiled_prompt: string;
   stage: SavedPrompt["stage"];
+  quality_round: number;
+  question_index: number;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -221,6 +223,8 @@ function sessionFromRow(row: SessionRow): SavedPrompt {
     researchBrief: row.research_brief ?? EMPTY_RESEARCH_BRIEF,
     compiledPrompt: row.compiled_prompt,
     stage: row.stage,
+    qualityRound: row.quality_round,
+    questionIndex: row.question_index,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -244,6 +248,8 @@ export async function listSessions(
       research_brief,
       compiled_prompt,
       stage,
+      quality_round,
+      question_index,
       created_at,
       updated_at
     FROM promptwell.sessions
@@ -272,6 +278,8 @@ export async function upsertSession(
       research_brief,
       compiled_prompt,
       stage,
+      quality_round,
+      question_index,
       created_at,
       updated_at
     )
@@ -287,8 +295,10 @@ export async function upsertSession(
       ${sql.json(toJson(session.researchBrief))},
       ${session.compiledPrompt},
       ${session.stage},
-      ${session.createdAt},
-      ${session.updatedAt}
+      ${session.qualityRound ?? 4},
+      ${session.questionIndex ?? 0},
+      now(),
+      now()
     FROM promptwell.workspaces AS workspace
     WHERE workspace.id = ${session.workspaceId} AND workspace.user_id = ${userId}
     ON CONFLICT (id) DO UPDATE SET
@@ -300,7 +310,9 @@ export async function upsertSession(
       research_brief = EXCLUDED.research_brief,
       compiled_prompt = EXCLUDED.compiled_prompt,
       stage = EXCLUDED.stage,
-      updated_at = EXCLUDED.updated_at
+      quality_round = GREATEST(promptwell.sessions.quality_round, COALESCE(${session.qualityRound ?? null}::integer, promptwell.sessions.quality_round)),
+      question_index = COALESCE(${session.questionIndex ?? null}::integer, promptwell.sessions.question_index),
+      updated_at = now()
     WHERE promptwell.sessions.user_id = ${userId}
     RETURNING
       id,
@@ -313,6 +325,8 @@ export async function upsertSession(
       research_brief,
       compiled_prompt,
       stage,
+      quality_round,
+      question_index,
       created_at,
       updated_at
   `;
